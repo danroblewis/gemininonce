@@ -28,6 +28,9 @@ SEL_SEND = 'button[aria-label*="Send"]'
 SEL_STOP = 'button[aria-label*="Stop"]'
 SEL_RESPONSE = "model-response"
 SEL_RESPONSE_BODY = "message-content"
+SEL_SIGNED_OUT = 'a[href*="accounts.google.com/ServiceLogin"]'
+SEL_ACCOUNT = 'a[href*="accounts.google.com/SignOutOptions"], [aria-label^="Google Account"]'
+EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 
 HOME = Path(os.environ.get("GEMININONCE_HOME", Path.home() / ".gemininonce"))
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", ".tox", ".mypy_cache"}
@@ -81,18 +84,78 @@ def ask_user(msg: str) -> str:
         return ""
 
 
+# --- Using your real Chrome profile ---------------------------------------------------------------
+# Chrome 136+ refuses automation of its *default* data dir, but a copy elsewhere works, and the
+# copied cookies still decrypt (on macOS the key lives in the Keychain, not the profile). So we
+# mirror your profile (minus caches) into ~/.gemininonce/chrome and launch that: same SSO sessions.
+CHROME_DATA = {
+    "darwin": Path.home() / "Library/Application Support/Google/Chrome",
+    "linux": Path.home() / ".config/google-chrome",
+    "win32": Path(os.environ.get("LOCALAPPDATA", "")) / "Google/Chrome/User Data",
+}.get(sys.platform)
+PROFILE_SKIP = ["Service Worker", "File System", "History*", "Favicons*", "Top Sites*", "Visited Links",
+                "Sessions", "Current Session", "Current Tabs", "Last Session", "Last Tabs", "*Cache*",
+                "Shared Dictionary", "Crashpad", "Singleton*", "BrowserMetrics*"]
+
+
+def chrome_profiles() -> dict[str, str]:
+    """{profile dir: 'Name <email>'} from Chrome's Local State."""
+    import json
+    try:
+        info = json.loads((CHROME_DATA / "Local State").read_text())["profile"]["info_cache"]
+    except (OSError, KeyError, ValueError, TypeError):
+        return {}
+    return {d: f"{v.get('name', '')} <{v.get('user_name') or 'not signed in'}>" for d, v in info.items()}
+
+
+def resolve_profile(name: str) -> str:
+    """Accept a profile dir ('Profile 2'), display name, or email substring."""
+    profiles = chrome_profiles()
+    if name in profiles:
+        return name
+    hits = [d for d, label in profiles.items() if name.lower() in label.lower()]
+    if len(hits) != 1:
+        listing = "\n".join(f"  {d!r}: {label}" for d, label in profiles.items()) or "  (none found)"
+        sys.exit(f"Chrome profile {name!r} is {'ambiguous' if hits else 'not found'}. Profiles:\n{listing}")
+    return hits[0]
+
+
+def mirror_chrome_profile(profile: str, dest: Path) -> None:
+    src = CHROME_DATA / profile
+    dest.mkdir(parents=True, exist_ok=True)
+    dest.chmod(0o700)  # holds live session cookies
+    print(f"Copying Chrome profile {profile!r} ({chrome_profiles().get(profile, '')}) ...")
+    shutil.copy2(CHROME_DATA / "Local State", dest / "Local State")
+    if shutil.which("rsync"):
+        cmd = ["rsync", "-a", "--delete", *[f"--exclude={p}" for p in PROFILE_SKIP], f"{src}/", str(dest / profile)]
+        subprocess.run(cmd, check=False, stderr=subprocess.DEVNULL)  # files changing mid-copy are fine
+    else:
+        import fnmatch
+        shutil.rmtree(dest / profile, ignore_errors=True)
+        shutil.copytree(src, dest / profile, ignore_dangling_symlinks=True,
+                        ignore=lambda d, names: [n for n in names if any(fnmatch.fnmatch(n, p) for p in PROFILE_SKIP)])
+
+
 # --- Gemini browser driver ------------------------------------------------------------------------
 class Gemini:
-    def __init__(self, profile: Path, cdp: str | None = None):
+    def __init__(self, profile: Path, cdp: str | None = None, account: str | None = None,
+                 chrome_profile: str | None = None):
+        self.required_account = account
         self.pw = sync_playwright().start()
         if cdp:
             self.ctx = self.pw.chromium.connect_over_cdp(cdp).contexts[0]
         else:
+            args = ["--disable-blink-features=AutomationControlled"]
+            if chrome_profile:
+                mirror_chrome_profile(chrome_profile, profile)
+                args += [f"--profile-directory={chrome_profile}", "--no-first-run"]
             kw = dict(
                 headless=False,
                 viewport=None,
-                args=["--disable-blink-features=AutomationControlled"],
-                ignore_default_args=["--enable-automation"],
+                args=args,
+                # Playwright's defaults hide the real macOS Keychain, so copied cookies wouldn't decrypt.
+                ignore_default_args=["--enable-automation"]
+                + (["--use-mock-keychain", "--password-store=basic"] if chrome_profile else []),
             )
             try:  # real Chrome is much less likely to be blocked at Google sign-in
                 self.ctx = self.pw.chromium.launch_persistent_context(str(profile), channel="chrome", **kw)
@@ -106,9 +169,75 @@ class Gemini:
             print("Log in to Gemini in the browser window (waiting up to 5 minutes)...")
             self.page.wait_for_url("https://gemini.google.com/**", timeout=300_000)
             self.page.wait_for_selector(SEL_INPUT, timeout=300_000)
+        self.check_account(wait=True)
+
+    def account(self) -> str | None:
+        """Signed-in email, or None when signed out / unknown. Waits briefly for the header to render."""
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            if self.page.locator(SEL_SIGNED_OUT).count():
+                return None
+            for el in self.page.locator(SEL_ACCOUNT).all():
+                m = EMAIL_RE.search(el.get_attribute("aria-label") or "")
+                if m:
+                    return m.group(0)
+            time.sleep(0.5)
+        return None
+
+    def _ok(self, email: str | None) -> bool:
+        want = self.required_account
+        return bool(email) and (not want or want.lower() in email.lower())
+
+    def _open(self, url: str) -> str | None:
+        self.page.goto(url)
+        try:
+            self.page.wait_for_selector(SEL_INPUT, timeout=15_000)
+        except PWTimeout:
+            return None
+        return self.account()
+
+    def _find_account(self) -> str | None:
+        """With several Google accounts signed in, each has its own /u/N/ URL. Find the right one."""
+        for n in range(6):
+            email = self._open(f"https://gemini.google.com/u/{n}/app")
+            if self._ok(email):
+                return email
+            if email is None:
+                break
+        return None
+
+    def check_account(self, wait: bool = False) -> None:
+        """Refuse to talk to Gemini unless signed in (as the required account, if one is set)."""
+        want = self.required_account
+        email = self.account()
+        if self._ok(email):
+            if wait:
+                print(f"Gemini account: {email}")
+            return
+        if not wait:
+            raise SystemExit(f"Refusing to send: Gemini is signed in as {email or 'nobody (signed out)'}"
+                             + (f", expected {want}" if want else ""))
+        if email and (found := self._find_account()):
+            print(f"Gemini account: {found}")
+            return
+        print(f"Gemini is signed in as {email or 'nobody'}. Sign in{' as ' + want if want else ''} "
+              "in the browser window (waiting up to 5 minutes)...")
+        self.page.goto("https://accounts.google.com/ServiceLogin?continue=" + GEMINI_URL)
+        deadline = time.time() + 300
+        while time.time() < deadline:
+            time.sleep(2)
+            if not self.page.url.startswith("https://gemini.google.com"):
+                continue  # still on the Google sign-in pages
+            if (found := self._find_account()):
+                print(f"Gemini account: {found}")
+                return
+            print(f"Still not signed in{' as ' + want if want else ''}; opening sign-in again...")
+            self.page.goto("https://accounts.google.com/ServiceLogin?continue=" + GEMINI_URL)
+        raise SystemExit("Timed out waiting for Gemini sign-in; nothing was sent.")
 
     def ask(self, text: str, timeout: float = 600) -> list[dict]:
         page = self.page
+        self.check_account()  # re-check every time: a session can expire or switch mid-run
         n = page.locator(SEL_RESPONSE).count()
         box = page.locator(SEL_INPUT).first
         box.click()
@@ -492,9 +621,21 @@ def main():
     ap.add_argument("--patience", type=int, default=3, help="stop after N rounds with unchanged test output")
     ap.add_argument("--timeout", type=int, default=300, help="timeout for test/commands (seconds)")
     ap.add_argument("--profile", default=str(HOME / "profile"), help="browser profile dir (keeps login)")
+    ap.add_argument("--account", default=os.environ.get("GEMININONCE_ACCOUNT"),
+                    help="refuse to send unless the Gemini account contains this, e.g. @corp.com")
+    ap.add_argument("--chrome-profile", default=os.environ.get("GEMININONCE_CHROME_PROFILE"),
+                    help="use a copy of your own Chrome profile (dir, name or email, e.g. 'Profile 2'); "
+                         "'list' shows them")
     ap.add_argument("--cdp", help="attach to an already-running Chrome, e.g. http://127.0.0.1:9222")
     args = ap.parse_args()
+    if args.chrome_profile == "list":
+        for d, label in chrome_profiles().items():
+            print(f"  {d!r}: {label}")
+        return 0
 
+    for var in os.environ:
+        if var.startswith("GEMININONCE_") and var not in ("GEMININONCE_ACCOUNT", "GEMININONCE_HOME", "GEMININONCE_CHROME_PROFILE"):
+            print(f"warning: unknown environment variable {var} (did you mean GEMININONCE_ACCOUNT?)")
     root = Path(args.root).resolve()
     HOME.mkdir(parents=True, exist_ok=True)
     backup_dir = HOME / "backups" / time.strftime("%Y%m%d-%H%M%S")
@@ -525,7 +666,12 @@ def main():
         RULES,
     ]))
 
-    gemini = Gemini(Path(args.profile), args.cdp)
+    profile_dir, chrome_profile = Path(args.profile), None
+    if args.chrome_profile:
+        chrome_profile = resolve_profile(args.chrome_profile)
+        if args.profile == str(HOME / "profile"):
+            profile_dir = HOME / "chrome"
+    gemini = Gemini(profile_dir, args.cdp, args.account, chrome_profile)
     passed, stalled, last_sig = False, 0, _signature(test_out)
     try:
         for i in range(1, args.max_iters + 1):

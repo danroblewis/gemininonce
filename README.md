@@ -51,6 +51,33 @@ snippet can't be placed unambiguously, it's rejected and Gemini is asked for the
 Other options: `--root` sets the project root that paths are relative to, and
 `--cdp http://127.0.0.1:9222` attaches to a Chrome you started with `--remote-debugging-port=9222`.
 
+## Which account is used
+
+**Use your own Chrome login (SSO, 2FA, work account):**
+
+```sh
+gemininonce --chrome-profile list x              # show your Chrome profiles
+export GEMININONCE_CHROME_PROFILE="Profile 2"     # dir, name, or email
+export GEMININONCE_ACCOUNT=@yourcompany.com
+```
+
+Chrome 136 and later refuse to let automation control your real Chrome data directory. So at the
+start of each run your profile is copied, without caches or history, into `~/.gemininonce/chrome`,
+which only your user can read. Chrome then runs from that copy. The first copy is a few hundred MB,
+and later runs copy only what changed. On macOS the cookies decrypt through the Keychain, so you're
+already logged in. Your normal Chrome can stay open.
+
+The copy trick works on macOS and Linux. On Windows, Chrome's app-bound cookie encryption means a
+copied profile won't be logged in.
+
+**Without `--chrome-profile`**, the tool uses its own empty profile (`~/.gemininonce/profile`),
+where you'd sign in once.
+
+**Account check:** Gemini lets you chat while signed out, and nothing would look wrong. So before
+every message the tool reads the signed-in account from the page, and it refuses to send if
+Gemini is signed out or doesn't match `GEMININONCE_ACCOUNT` / `--account`. If several Google
+accounts are signed in, it switches to the matching one.
+
 ## When it breaks
 
 Gemini's DOM changes from time to time. The selectors are constants at the top of `gemininonce.py`. The
