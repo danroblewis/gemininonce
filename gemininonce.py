@@ -94,9 +94,9 @@ class Gemini:
         try:
             self.page.wait_for_selector(SEL_INPUT, timeout=15_000)
         except PWTimeout:
-            input("Log in to Gemini in the browser window, then press Enter here... ")
-            self.page.goto(GEMINI_URL)
-            self.page.wait_for_selector(SEL_INPUT, timeout=60_000)
+            print("Log in to Gemini in the browser window (waiting up to 5 minutes)...")
+            self.page.wait_for_url("https://gemini.google.com/**", timeout=300_000)
+            self.page.wait_for_selector(SEL_INPUT, timeout=300_000)
 
     def ask(self, text: str, timeout: float = 600) -> list[dict]:
         page = self.page
@@ -108,7 +108,12 @@ class Gemini:
             page.locator(SEL_SEND).first.click(timeout=5_000)
         except PWTimeout:
             box.press("Enter")
-        page.wait_for_function(f"document.querySelectorAll('{SEL_RESPONSE}').length > {n}", timeout=60_000)
+        # Poll from Python: Gemini's Trusted Types CSP blocks string-eval'd wait_for_function.
+        start = time.time()
+        while page.locator(SEL_RESPONSE).count() <= n:
+            if time.time() - start > 60:
+                raise TimeoutError("Gemini never started a response (message not sent?)")
+            time.sleep(0.5)
 
         # Done when the stop button is gone and the reply text has been stable for a few seconds.
         last = page.locator(SEL_RESPONSE).last
@@ -184,6 +189,8 @@ def collect_files(root: Path, targets: list[str]) -> dict[str, str]:
     files = {}
     for t in targets:
         p = Path(t).resolve()
+        if not p.exists():
+            sys.exit(f"{t}: no such file or directory (cwd is {Path.cwd()})")
         for f in sorted(list_dir(p) if p.is_dir() else [p]):
             if not f.resolve().is_relative_to(root):
                 sys.exit(f"{f} is outside --root {root}")
