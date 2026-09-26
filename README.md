@@ -11,6 +11,35 @@ uv tool install -e .          # or: pip install -e .
 playwright install chromium   # only needed if Google Chrome isn't installed
 ```
 
+### One-liner with uvx (no install)
+
+[uv](https://docs.astral.sh/uv/)'s `uvx` runs it in a temporary environment:
+
+```sh
+# from a local checkout
+uvx --refresh-package gemininonce --from ~/gemininonce gemininonce src/ tests/ -t "pytest -x"
+
+# from git, once the repo is pushed somewhere
+uvx --refresh-package gemininonce --from git+https://github.com/<you>/gemininonce gemininonce src/ tests/ -t "pytest -x"
+
+# with your own Chrome login and a required account
+uvx --refresh-package gemininonce --from ~/gemininonce gemininonce src/ tests/ -t "pytest -x" \
+  --chrome-profile Default --account @yourcompany.com
+```
+
+`--refresh-package gemininonce` makes uv rebuild from the current source. Without it, uv keeps
+running the cached copy and ignores your edits. It re-checks only this package, so it's still fast.
+
+It uses the Google Chrome you already have installed, so there's nothing else to download. Without
+Chrome, run `uvx playwright install chromium` once.
+
+For a short command, add an alias to `~/.zshrc`:
+
+```sh
+alias gn='uvx --refresh-package gemininonce --from ~/gemininonce gemininonce'
+# gn src/ tests/ -t "pytest -x"
+```
+
 On the first run a Chrome window opens. Log in to Gemini there. The login is saved in
 `~/.gemininonce/profile`.
 
