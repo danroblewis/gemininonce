@@ -218,6 +218,151 @@ def fenced(text: str, info: str = "") -> str:
     return f"{fence}{info}\n{text.rstrip()}\n{fence}"
 
 
+# --- Partial-edit merging ---------------------------------------------------------------------
+# When Gemini sends only the changed functions/classes instead of a whole file, splice each
+# definition into the old file by name. Block extents come from indentation (plus closing
+# brackets), so this works for Python and most brace languages without real parsing.
+DEF_RE = re.compile(
+    r"^\s*(?:(?:export|default|public|private|protected|internal|static|async|override|final|abstract|"
+    r"inline|virtual|unsafe|extern|pub(?:\([^)]*\))?)\s+)*"
+    r"(?:(?:def|class|function\*?|func|fn|struct|enum|interface|trait|impl|type|module)\s+(?:\([^)]*\)\s*)?"
+    r"(?P<a>[A-Za-z_$][\w$]*)|(?:const|let|var)\s+(?P<b>[A-Za-z_$][\w$]*)\s*=)")
+PLACEHOLDER = re.compile(r"^\s*(?:#|//|/\*+|<!--|--|\*)\s*(?:\.\.\.|…)|^\s*(?:\.\.\.|…)\s*$")
+IMPORT_RE = re.compile(r"^\s*(?:import|from|#include|use|using|require)\b")
+COMMENT_RE = re.compile(r"^\s*(?:#|//|/\*|\*|<!--|--)")
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip())
+
+
+def _name(line: str) -> str | None:
+    m = DEF_RE.match(line)
+    return m and (m.group("a") or m.group("b"))
+
+
+def _is_placeholder(line: str) -> bool:
+    return bool(PLACEHOLDER.match(line) or LAZY.search(line))
+
+
+def _block(lines: list[str], i: int) -> tuple[int, int]:
+    """(start, end) of the definition whose header is lines[i], including decorators above it."""
+    ind, j = _indent(lines[i]), i + 1
+    while j < len(lines):
+        s = lines[j].strip()
+        if not s or _indent(lines[j]) > ind:
+            j += 1
+            continue
+        if s[0] in "})]" or s == "end":
+            j += 1
+            if s.endswith((":", "{")):  # `) -> int:` or `} else {`: header/body continues
+                continue
+        break
+    while j > i + 1 and not lines[j - 1].strip():
+        j -= 1
+    s = i
+    while s > 0 and lines[s - 1].strip().startswith(("@", "#[")) and _indent(lines[s - 1]) == ind:
+        s -= 1
+    return s, j
+
+
+def _defs(lines: list[str], lo: int, hi: int) -> list[tuple[str, int, int, int]]:
+    """Direct child definitions in lines[lo:hi] as (name, start, header, end)."""
+    out, i = [], lo
+    while i < hi:
+        name = _name(lines[i])
+        if name:
+            s, e = _block(lines, i)
+            out.append((name, s, i, min(e, hi)))
+            i = e
+        else:
+            i += 1
+    return out
+
+
+def _kids(lines: list[str], lo: int, hi: int) -> set[str]:
+    """Names of nested functions/classes (not local variables) directly inside lines[lo:hi]."""
+    return {d[0] for d in _defs(lines, lo, hi) if DEF_RE.match(lines[d[2]]).group("a")}
+
+
+def _reindent(lines: list[str], delta: int) -> list[str]:
+    if delta >= 0:
+        return [(" " * delta + ln) if ln.strip() else ln for ln in lines]
+    return [ln[min(-delta, _indent(ln)):] for ln in lines]
+
+
+def looks_partial(old: str, new: str) -> bool:
+    new_lines = new.splitlines()
+    if any(_is_placeholder(ln) for ln in new_lines) and not any(_is_placeholder(ln) for ln in old.splitlines()):
+        return True
+    old_names = {n for ln in old.splitlines() if (n := _name(ln))}
+    new_names = {n for ln in new_lines if (n := _name(ln))}
+    return bool(old_names - new_names) and len(new_lines) < 0.8 * len(old.splitlines())
+
+
+def merge_partial(old_text: str, new_text: str) -> tuple[str, list[str]] | None:
+    """Splice definitions from a snippet into old_text. None if it can't be done unambiguously."""
+    old, new = old_text.splitlines(), new_text.splitlines()
+    old_stripped = {ln.strip() for ln in old}
+    splices, log, imports = [], [], []
+
+    def walk(nlo, nhi, olo, ohi) -> bool:
+        i = nlo
+        while i < nhi:
+            line, name = new[i], _name(new[i])
+            if not name:
+                s = line.strip()
+                if IMPORT_RE.match(line) and s not in old_stripped:
+                    imports.append(s)
+                elif s and s not in old_stripped and not _is_placeholder(line) and not COMMENT_RE.match(line) \
+                        and not line.lstrip().startswith("@"):
+                    return False  # a changed line outside any definition: can't place it safely
+                i += 1
+                continue
+            s, e = _block(new, i)
+            e = min(e, nhi)
+            cands = [d for d in _defs(old, olo, ohi) if d[0] == name]
+            if not cands:  # maybe a method sent without its class
+                cands = [(name, bs, k, be) for k, ln in enumerate(old) if _name(ln) == name
+                         for bs, be in [_block(old, k)]]
+            if len(cands) > 1:
+                return False
+            if not cands:  # brand-new definition: add at the end of the enclosing scope
+                pos = ohi
+                if olo > 0 and pos > olo and old[pos - 1].strip()[:1] in ("}", ")", "]") \
+                        and _indent(old[pos - 1]) == _indent(old[olo - 1]):  # container's own closer
+                    pos -= 1
+                kids = _defs(old, olo, ohi)
+                target = _indent(old[kids[0][2]]) if kids else (0 if olo == 0 else _indent(old[olo - 1]) + 4)
+                splices.append((pos, pos, [""] + _reindent(new[s:e], target - _indent(new[i]))))
+                log.append(f"added {name}")
+            else:
+                _, os_, oh, oe = cands[0]
+                block = new[s:e]
+                missing = _kids(old, oh + 1, oe) - _kids(new, i + 1, e)
+                if any(_is_placeholder(ln) for ln in block) or missing:
+                    if not walk(i + 1, e, oh + 1, oe):  # container sent partially: recurse into it
+                        return False
+                else:
+                    splices.append((os_, oe, _reindent(block, _indent(old[oh]) - _indent(new[i]))))
+                    log.append(f"replaced {name}")
+            i = e
+        return True
+
+    if not walk(0, len(new), 0, len(old)) or not (splices or imports):
+        return None
+    splices.sort(key=lambda x: (x[0], x[1]))
+    if any(a[1] > b[0] for a, b in zip(splices, splices[1:])):
+        return None  # overlapping replacements
+    for s, e, repl in reversed(splices):
+        old[s:e] = repl
+    if imports:
+        last = max((k for k, ln in enumerate(old) if IMPORT_RE.match(ln) and not _indent(ln)), default=-1)
+        old[last + 1:last + 1] = imports
+        log.append(f"added {len(imports)} import(s)")
+    return "\n".join(old) + "\n", log
+
+
 def apply_edits(root: Path, edits, backup_dir: Path) -> list[str]:
     notes = []
     for rel, content in edits:
@@ -228,10 +373,20 @@ def apply_edits(root: Path, edits, backup_dir: Path) -> list[str]:
             continue
         if not content.endswith("\n"):
             content += "\n"
-        if LAZY.search(content) and ask_user(f"  {rel} looks like a partial file. Apply anyway? [y/N] ").lower() != "y":
-            notes.append(f"Your `{rel}` looked partial (placeholder like '... rest unchanged'). Send the COMPLETE file.")
-            continue
         old = p.read_text() if p.exists() else None
+        if old is not None and looks_partial(old, content):
+            merged = merge_partial(old, content)
+            if merged and p.suffix == ".py":
+                try:
+                    compile(merged[0], rel, "exec")
+                except SyntaxError:
+                    merged = None
+            if not merged:
+                print(f"  REJECTED {rel}: partial edit that couldn't be merged")
+                notes.append(f"Your `{rel}` was partial and couldn't be merged. Send the COMPLETE file.")
+                continue
+            content = merged[0]
+            print(f"  merged partial edit into {rel}: {', '.join(merged[1])}")
         if old == content:
             continue
         if old is not None:
@@ -302,6 +457,29 @@ def review_commands(commands: list[str], root: Path, timeout: int, test_cmd: str
     return results
 
 
+GEMINI_ERROR = re.compile(r"encountered an error|something went wrong|try again|can't help with that|"
+                          r"having trouble|unable to (?:process|respond)", re.I)
+
+
+def ask_for_code(gemini: Gemini, prompt: str, retries: int):
+    """Ask, retrying when the reply has no files or commands (Gemini errors, refusals, chatter)."""
+    msg = prompt
+    for attempt in range(retries + 1):
+        edits, commands, prose = parse_reply(gemini.ask(msg))
+        if edits or commands or attempt == retries:
+            return edits, commands, prose
+        text = prose.strip()
+        if len(text) < 300 or GEMINI_ERROR.search(text):
+            print(f"  Gemini replied without code ({text[:80]!r}); resending ({attempt + 1}/{retries})")
+            time.sleep(5)
+            msg = prompt
+        else:
+            print(f"  Gemini replied without code; asking for files ({attempt + 1}/{retries})")
+            msg = ("Your reply contained no FILE: blocks, so nothing was applied. Reply with the complete "
+                   "contents of every file that needs to change.\n\n" + RULES)
+    return edits, commands, prose
+
+
 # --- Main loop ----------------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser(description="Fix code with Gemini web in a test loop.")
@@ -309,7 +487,9 @@ def main():
     ap.add_argument("-t", "--test", help="command that must pass (exit 0), e.g. 'pytest -x'")
     ap.add_argument("-m", "--message", default="", help="what you want done (optional if --test fails)")
     ap.add_argument("--root", default=".", help="project root; paths in replies are relative to it")
-    ap.add_argument("-n", "--max-iters", type=int, default=5)
+    ap.add_argument("-n", "--max-iters", type=int, default=20, help="hard cap on rounds")
+    ap.add_argument("--retries", type=int, default=3, help="re-asks when Gemini replies without code")
+    ap.add_argument("--patience", type=int, default=3, help="stop after N rounds with unchanged test output")
     ap.add_argument("--timeout", type=int, default=300, help="timeout for test/commands (seconds)")
     ap.add_argument("--profile", default=str(HOME / "profile"), help="browser profile dir (keeps login)")
     ap.add_argument("--cdp", help="attach to an already-running Chrome, e.g. http://127.0.0.1:9222")
@@ -325,7 +505,7 @@ def main():
     size = sum(map(len, files.values()))
     print(f"Sending {len(files)} file(s), {size:,} chars.")
     if size > 400_000 and ask_user("That's a lot for a chat message. Continue? [y/N] ").lower() != "y":
-        return
+        return 1
 
     test_out = ""
     if args.test:
@@ -346,10 +526,11 @@ def main():
     ]))
 
     gemini = Gemini(Path(args.profile), args.cdp)
+    passed, stalled, last_sig = False, 0, _signature(test_out)
     try:
         for i in range(1, args.max_iters + 1):
             print(f"\n=== Round {i}: asking Gemini ===")
-            edits, commands, prose = parse_reply(gemini.ask(prompt))
+            edits, commands, prose = ask_for_code(gemini, prompt, args.retries)
             if prose.strip():
                 print("\n" + "\n".join("  | " + line for line in prose.strip().splitlines()[:30]))
             notes = apply_edits(root, edits, backup_dir)
@@ -372,10 +553,19 @@ def main():
             code, out = run(args.test, root, args.timeout)
             if code == 0:
                 print(f"\nTests pass after {i} round(s).")
+                passed = True
+                break
+            sig = _signature(out)
+            stalled = stalled + 1 if sig == last_sig else 0
+            last_sig = sig
+            if stalled >= args.patience:
+                print(f"\nNo progress for {stalled} rounds (same test output); stopping.")
                 break
             prompt = "\n\n".join([
                 f"I applied your changes. `{args.test}` still fails (exit {code}). Output:\n{fenced(out)}",
-                *notes, *results, "Fix it.", RULES,
+                *notes, *results,
+                "Fix it." if not stalled else "That did not change the failure at all. Try a different approach.",
+                RULES,
             ])
         else:
             print(f"\nGave up after {args.max_iters} rounds.")
@@ -383,10 +573,18 @@ def main():
         if backup_dir.exists():
             print(f"Originals of modified files backed up in {backup_dir}")
         gemini.close()
+    return 0 if passed or not args.test else 1
+
+
+def _signature(out: str) -> str:
+    """Test output with timings, addresses and temp paths removed, to detect 'no progress'."""
+    out = re.sub(r"\d+(\.\d+)?\s*(s|ms|sec|seconds)\b", "", out)
+    out = re.sub(r"0x[0-9a-fA-F]+", "", out)
+    return re.sub(r"/(?:private/)?(?:var|tmp)/\S+", "", out)
 
 
 if __name__ == "__main__":
     try:
-        main()
+        sys.exit(main())
     except KeyboardInterrupt:
         sys.exit(130)
