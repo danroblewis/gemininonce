@@ -72,6 +72,15 @@ MARKER = re.compile(r"^[\s*_#>`-]*(FILE|COMMAND)[\s*_`]*:[\s*_`]*([^\s*`]*)", re
 LAZY = re.compile(r"\.\.\.\s*\(?\s*(rest|remaining|existing|unchanged|same as|other)", re.I)
 
 
+def ask_user(msg: str) -> str:
+    """input() that treats a closed stdin (non-interactive run) as an empty answer."""
+    try:
+        return input(msg)
+    except EOFError:
+        print("(no input available)")
+        return ""
+
+
 # --- Gemini browser driver ------------------------------------------------------------------------
 class Gemini:
     def __init__(self, profile: Path, cdp: str | None = None):
@@ -219,7 +228,7 @@ def apply_edits(root: Path, edits, backup_dir: Path) -> list[str]:
             continue
         if not content.endswith("\n"):
             content += "\n"
-        if LAZY.search(content) and input(f"  {rel} looks like a partial file. Apply anyway? [y/N] ").lower() != "y":
+        if LAZY.search(content) and ask_user(f"  {rel} looks like a partial file. Apply anyway? [y/N] ").lower() != "y":
             notes.append(f"Your `{rel}` looked partial (placeholder like '... rest unchanged'). Send the COMPLETE file.")
             continue
         old = p.read_text() if p.exists() else None
@@ -270,13 +279,18 @@ def edit_text(text: str) -> str:
         return input("  edit (empty keeps original)> ").strip() or text
 
 
-def review_commands(commands: list[str], root: Path, timeout: int) -> list[str]:
+def review_commands(commands: list[str], root: Path, timeout: int, test_cmd: str | None) -> list[str]:
     results = []
     for cmd in commands:
+        if cmd == test_cmd:
+            continue  # the loop runs the test itself
         print("\nGemini suggests running:\n" + "\n".join("    " + line for line in cmd.splitlines()))
         while True:
-            a = input("  [a]pprove / [m]odify / [s]kip? ").strip().lower()
+            a = ask_user("  [a]pprove / [m]odify / [s]kip? ").strip().lower()
             if a in ("a", "m", "s"):
+                break
+            if not a and not sys.stdin.isatty():
+                a = "s"
                 break
         if a == "m":
             cmd = edit_text(cmd)
@@ -310,7 +324,7 @@ def main():
         sys.exit("No readable files to send.")
     size = sum(map(len, files.values()))
     print(f"Sending {len(files)} file(s), {size:,} chars.")
-    if size > 400_000 and input("That's a lot for a chat message. Continue? [y/N] ").lower() != "y":
+    if size > 400_000 and ask_user("That's a lot for a chat message. Continue? [y/N] ").lower() != "y":
         return
 
     test_out = ""
@@ -339,17 +353,17 @@ def main():
             if prose.strip():
                 print("\n" + "\n".join("  | " + line for line in prose.strip().splitlines()[:30]))
             notes = apply_edits(root, edits, backup_dir)
-            results = review_commands(commands, root, args.timeout)
+            results = review_commands(commands, root, args.timeout, args.test)
 
             if not edits and not commands:
-                reply = input("\nNo file changes or commands. Your reply (empty to stop): ").strip()
+                reply = ask_user("\nNo file changes or commands. Your reply (empty to stop): ").strip()
                 if not reply:
                     break
                 prompt = f"{reply}\n\n{RULES}"
                 continue
 
             if not args.test:
-                reply = input("\nApplied. Follow-up for Gemini (empty to finish): ").strip()
+                reply = ask_user("\nApplied. Follow-up for Gemini (empty to finish): ").strip()
                 if not reply:
                     break
                 prompt = "\n\n".join([reply, *notes, *results, RULES])
