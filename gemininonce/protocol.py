@@ -133,7 +133,8 @@ def spec_prompt(idea: str, spec_path: str, test_cmd: str, files: dict[str, str],
         "- Examples: concrete input -> output pairs.\n"
         "- Edge cases and errors.\n"
         "- Out of scope.",
-        f"Tests will be run with `{test_cmd}`, so name modules so the tests can import them.",
+        f"Tests will be run exactly as `{test_cmd}` from the project root, so name modules so the tests "
+        "can import them when run that way.",
         *_context(files, layout),
         RULES,
     ]))
@@ -144,7 +145,7 @@ def tests_prompt(spec: str, spec_path: str, test_cmd: str, tests_dir: str, files
     return "\n\n".join(filter(None, [
         "You are writing TESTS for code that does not exist yet (test-first). The specification below "
         "was agreed with the user.",
-        f"- Tests run with `{test_cmd}`. Put every test file under `{tests_dir}/`.\n"
+        f"- Tests run exactly as `{test_cmd}` from the project root. Put every test file under `{tests_dir}/`.\n"
         "- Cover every numbered requirement and every example; one focused test per behavior, named "
         "after it (e.g. test_r3_rejects_empty_input).\n"
         "- Import the code exactly as named in the spec's Interface section.\n"
@@ -171,7 +172,10 @@ def revise_prompt(what: str, feedback: str) -> str:
                         "Send the complete updated file(s).", RULES])
 
 
-def implement_message(spec_path: str, tests_dir: str) -> str:
-    return (f"Implement the project described in {spec_path} so that all tests pass. {spec_path} and the "
-            f"tests in {tests_dir}/ were agreed with the user and are locked: don't change them. If a test "
-            f"looks wrong, say so in your reply instead of working around it.")
+def implement_message(spec_path: str, tests_dir: str, test_cmd: str) -> str:
+    return (f"Implement the project described in {spec_path} so that all tests pass when run exactly as "
+            f"`{test_cmd}` from the project root. {spec_path} and the tests in {tests_dir}/ were agreed with the "
+            f"user and are locked: don't change them. If the tests can't import the code when run that way, "
+            f"that's yours to fix: lay out the code accordingly or add configuration at the project root (for "
+            f"example a conftest.py or pyproject.toml). If a test looks wrong, say so in your reply instead of "
+            f"working around it.")

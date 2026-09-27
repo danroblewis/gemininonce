@@ -163,7 +163,10 @@ After stages 1 and 2 you review the result. Press Enter to accept, `e` to edit i
 without a terminal.
 
 Other options:
-- `-t` sets the test command (default `python -m pytest -q`). Gemini is told what it is.
+- `-t` sets the test command (default `pytest -q`), run from `--dir`. Every stage is told exactly how
+  tests will be run, and the build is only done when that command passes. Use the command you'll
+  actually use: for example, `python -m pytest` can import from the project folder when plain
+  `pytest` can't.
 - `--spec` and `--tests-dir` rename the spec file and the tests folder.
 - `--from tests` or `--from code` restarts at a later stage and reuses the earlier files, e.g. after
   editing the spec yourself.

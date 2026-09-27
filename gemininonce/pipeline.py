@@ -31,7 +31,8 @@ def build_parser() -> argparse.ArgumentParser:
                                  description="Turn an idea into a spec, then tests, then code that passes them.")
     ap.add_argument("idea", nargs="?", default="", help="what to build (not needed with --from tests/code)")
     ap.add_argument("--dir", default=".", help="project directory (created if missing)")
-    ap.add_argument("-t", "--test", default="python -m pytest -q", help="test command")
+    ap.add_argument("-t", "--test", default="pytest -q",
+                    help="test command, run from --dir; the build is done when it exits 0")
     ap.add_argument("--spec", default="SPEC.md", help="spec file, relative to --dir")
     ap.add_argument("--tests-dir", default="tests", help="where the test writer puts tests, relative to --dir")
     ap.add_argument("--from", dest="start", choices=STAGES, default="spec",
@@ -166,7 +167,7 @@ class Build:
         if code == 0:
             print(paint("The tests already pass; nothing to implement.", GREEN))
             return True
-        message = protocol.implement_message(self.spec, self.tests_dir)
+        message = protocol.implement_message(self.spec, self.tests_dir, self.args.test)
         prompt = protocol.initial_prompt(message, protocol.test_result(self.args.test, code, out), files, layout)
         loop = FixLoop(self.chat, self.ws, self.transcript, self.args.test, self.args.retries, self.args.patience,
                        self.args.max_iters, message)
@@ -214,6 +215,6 @@ def main(argv: list[str]) -> int:
         chat.browser.close()
         if args.anonymous:
             shutil.rmtree(profile_dir, ignore_errors=True)
-    print(paint(f"\n{'✔ Built: tests pass.' if passed else '✘ Not done: tests still fail.'}  ({root})",
-                GREEN if passed else RED, BOLD))
+    print(paint(f"\n{'✔ Built: tests pass' if passed else '✘ Not done: tests still fail'} "
+                f"with `{args.test}` in {root}", GREEN if passed else RED, BOLD))
     return 0 if passed else 1
