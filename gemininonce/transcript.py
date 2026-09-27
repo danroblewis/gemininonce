@@ -88,3 +88,11 @@ class Transcript:
         print("\n".join(paint("  │ ", DIM) + ln for ln in self.hl.code("\n".join(lines), lexer).splitlines()))
         if more:
             print(paint(f"  │ ... {more} more lines (-v shows all)", DIM))
+
+
+def sources_line(sources: list[str], shown: int = 4) -> str:
+    """'sources: 3 (docs.python.org, pypi.org, github.com)' for the web sources a reply cited."""
+    from urllib.parse import urlparse
+    hosts = list(dict.fromkeys(urlparse(u).netloc.removeprefix("www.") for u in sources))
+    more = f", +{len(hosts) - shown} more" if len(hosts) > shown else ""
+    return f"sources: {len(sources)} ({', '.join(hosts[:shown])}{more})"

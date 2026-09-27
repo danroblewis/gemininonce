@@ -87,8 +87,13 @@ EXTRACT_MD_JS = """
     if (t === 'STRONG' || t === 'B') return dunder ? '__' + n.textContent + '__' : '**' + inline(n) + '**';
     if (t === 'EM' || t === 'I') return dunder ? '_' + n.textContent + '_' : '*' + inline(n) + '*';
     if (t === 'BR') return '\\n';
+    if (t === 'A' && /^https?:/.test(n.href || '')) {  // keep the address (references need it)
+      const url = cleanUrl(n.href), text = inline(n).trim();
+      return !text || text === url ? '<' + url + '>' : '[' + text + '](' + url + ')';
+    }
     return inline(n);
   };
+  const cleanUrl = h => h.replace(/[?&]utm_source=gemini$/, '').replace(/([?&])utm_source=gemini&/, '$1');
   const inline = el => Array.from(el.childNodes).map(inlineNode).join('');
   const fenced = el => {
     const code = el.querySelector('code') || el.querySelector('pre') || el;
@@ -151,6 +156,14 @@ EXTRACT_MD_JS = """
 """
 
 
+# External links in a reply (Gemini's citations when it searched the web), without Google's own links.
+SOURCES_JS = """
+(root) => Array.from(new Set(Array.from(root.querySelectorAll('a[href]'))
+  .map(a => a.href.replace(/[?&]utm_source=gemini$/, '').replace(/([?&])utm_source=gemini&/, '$1'))
+  .filter(h => /^https?:/.test(h) && !/^https?:\\/\\/([^/]*\\.)?(google|gstatic|googleusercontent|youtube)\\.com\\//.test(h))))
+"""
+
+
 def model_key(name: str) -> str:
     """'3.6 Flash' -> 'flash', so a request survives version bumps."""
     return re.sub(r"^\d+(\.\d+)*\s*", "", name.strip().lower())
@@ -173,6 +186,7 @@ class GeminiChat:
         self.usage = usage or Usage()  # shared with other conversations for one cost total
         self.conversation = self.usage.new_conversation()
         self.last_markdown = ""  # the latest reply as Markdown (see EXTRACT_MD_JS)
+        self.last_sources: list[str] = []  # web sources the latest reply cited (see SOURCES_JS)
         self._connect()
 
     @property
@@ -337,7 +351,7 @@ class GeminiChat:
         """Send a message and return the reply as text/code blocks (see EXTRACT_JS). The same reply as
         Markdown is left in self.last_markdown."""
         page = self.page
-        self.last_markdown = ""
+        self.last_markdown, self.last_sources = "", []
         # re-check every time: a session can expire or switch mid-run
         self.check_signed_out() if self.anonymous else self.check_account()
         if self.model and model_key(self.current_model()) != model_key(self.model):
@@ -378,6 +392,7 @@ class GeminiChat:
         body = last.locator(SEL_RESPONSE_BODY).first
         (HOME / "last_response.html").write_text(body.evaluate("e => e.outerHTML"))
         self.last_markdown = body.evaluate(EXTRACT_MD_JS)
+        self.last_sources = body.evaluate(SOURCES_JS)
         return body.evaluate(EXTRACT_JS)
 
     def _timeout(self, what: str):

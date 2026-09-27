@@ -6,9 +6,9 @@ import sys
 import time
 
 from . import protocol
-from .console import BLUE, BOLD, DIM, GREEN, RED, YELLOW, ask_user, paint
+from .console import BLUE, BOLD, CYAN, DIM, GREEN, RED, YELLOW, ask_user, paint
 from .gemini import GeminiChat, GeminiTimeout
-from .transcript import Transcript
+from .transcript import Transcript, sources_line
 from .workspace import Workspace
 
 MAX_READS_PER_ROUND = 5  # replies that only ask for files, answered before we count it as "no code"
@@ -53,6 +53,8 @@ class FixLoop:
             print(paint(f"\n  {e}", YELLOW))
             return []
         self.transcript.reply(blocks)
+        if (sources := getattr(self.chat, "last_sources", None)):  # it searched the web
+            print(paint(f"  {sources_line(sources)}", CYAN))
         usage = self.chat.usage
         print(paint(f"  $ {usage.step(self.chat.model, len(usage.turns) - 1, 'this reply')}", GREEN))
         return blocks

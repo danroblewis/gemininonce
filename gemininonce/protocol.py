@@ -154,7 +154,22 @@ Only measurable ones (e.g. "solves n=8 in under 1 second", "deterministic output
 
 ## 10. Assumptions and open questions
 Decisions you made that the user didn't specify, so they can confirm or change them.
+
+## 11. References
+The sources you researched, as links, and what you took from each (an API, an algorithm, a standard,
+a library version, a pitfall to avoid).
 """
+
+SPEC_RESEARCH = (
+    "RESEARCH FIRST: before writing, use Google Search to research the idea, and base the spec on what you "
+    "find rather than on memory alone. Look for existing libraries and prior art (and whether to build on "
+    "them), the current documentation of any library, API or service it will use (exact endpoints, "
+    "parameters, formats, versions), relevant standards and file formats, well-known algorithms, and common "
+    "pitfalls. List every source you used, with its link, in section 11.")
+
+PLAN_RESEARCH = (
+    "If the project talks to real external services, use Google Search to check their current documentation "
+    "before planning the e2e tests: endpoints, authentication, rate limits, and any sandbox or test mode.")
 
 
 def doc_rules(kind: str) -> str:
@@ -214,7 +229,7 @@ def _context(files: dict[str, str], layout: str) -> list[str]:
 
 
 def spec_prompt(idea: str, spec_path: str, test_cmd: str, files: dict[str, str], layout: str,
-                may_ask: bool = True) -> str:
+                may_ask: bool = True, research: bool = True) -> str:
     return "\n\n".join(filter(None, [
         "You are a software architect writing a SPECIFICATION (not code) together with the user.",
         f"IDEA: {idea}",
@@ -226,6 +241,7 @@ def spec_prompt(idea: str, spec_path: str, test_cmd: str, files: dict[str, str],
         "and the wrong program.",
         f"Follow this template (it's saved as {spec_path}). Keep every section, and be concrete and complete "
         f"rather than brief:\n{fenced(SPEC_TEMPLATE, 'markdown')}",
+        SPEC_RESEARCH if research else "",
         f"Tests will be run exactly as `{test_cmd}` from the project root, so choose module names and a "
         "layout the tests can import when run that way.",
         ("If the idea leaves decisions open that would change the design, you may first ask the user up to 5 "
@@ -364,12 +380,13 @@ def guide(tests_dir: str) -> str:
 
 
 def plan_prompt(spec: str, spec_path: str, test_cmd: str, tests_dir: str, per_requirement: int,
-                files: dict[str, str], layout: str, may_ask: bool = True) -> str:
+                files: dict[str, str], layout: str, may_ask: bool = True, research: bool = True) -> str:
     return "\n\n".join(filter(None, [
         "You are a test engineer planning the TEST SUITE for software that doesn't exist yet (test-first). The "
         "specification below was agreed with the user. Plan first: the plan is reviewed, then the tests are "
         "written from it, then an implementer makes them pass.",
         guide(tests_dir),
+        PLAN_RESEARCH if research else "",
         f"Tests will run exactly as `{test_cmd}` from the project root.",
         f"Follow this template, keep every section, and be thorough: list every test case by name.\n"
         f"{fenced(TEST_PLAN_TEMPLATE.format(tests_dir=tests_dir, per_requirement=per_requirement), 'markdown')}",

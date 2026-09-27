@@ -20,11 +20,11 @@ from pathlib import Path
 
 from . import HOME, protocol
 from .cli import HelpFormatter, add_session_options, confirm_anonymous, open_chat, profile_dir_for
-from .console import BLUE, BOLD, DIM, GREEN, RED, YELLOW, ask_user, paint
+from .console import BLUE, BOLD, CYAN, DIM, GREEN, RED, YELLOW, ask_user, paint
 from .gemini import GeminiChat, GeminiTimeout
 from .highlight import Highlighter
 from .loop import FixLoop
-from .transcript import Transcript
+from .transcript import Transcript, sources_line
 from .workspace import Workspace
 
 STAGES = ("spec", "plan", "tests", "code")
@@ -57,6 +57,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--tests-reviews", type=int, default=1,
                     help="independent reviews of the tests: a fresh session compares them with the spec "
                          "(coverage, exact interface, correct expectations, no over-specifying)")
+    ap.add_argument("--no-research", dest="research", action="store_false",
+                    help="don't ask the spec writer and planner to research the web first")
     ap.add_argument("--accept", action="store_true",
                     help="accept the spec, plan and tests without discussing them (needed without a terminal)")
     add_session_options(ap)
@@ -314,6 +316,8 @@ class Build:
             print(paint(f"  {e}; skipping this review", YELLOW))
             return None
         Transcript(self.transcript.verbose, self.ws.hl).reply(blocks)
+        if (sources := getattr(self.reviewer, "last_sources", None)):
+            print(paint(f"  {sources_line(sources)}", CYAN))
         usage = self.reviewer.usage
         print(paint(f"  $ {usage.step(self.reviewer.model, len(usage.turns) - 1, 'review')}", GREEN))
         found = getattr(self.reviewer, "last_markdown", "") or protocol.blocks_markdown(blocks)
@@ -391,7 +395,7 @@ class Build:
         self.ws.guard = only(lambda rel: rel == self.spec, f"only {self.spec} may be written while writing the spec")
         files, layout = self.fresh_context()
         prompt = protocol.spec_prompt(self.args.idea, self.spec, self.args.test, files, layout,
-                                      may_ask=not self.args.accept)
+                                      may_ask=not self.args.accept, research=self.args.research)
         self.discuss(prompt, self.stages["spec"])
 
     def write_plan(self) -> None:
@@ -402,7 +406,8 @@ class Build:
         files, layout = self.fresh_context()
         files.pop(self.spec, None)  # quoted in the prompt already
         prompt = protocol.plan_prompt(self.read(self.spec), self.spec, self.args.test, self.tests_dir,
-                                      self.args.tests_per_requirement, files, layout, may_ask=not self.args.accept)
+                                      self.args.tests_per_requirement, files, layout, may_ask=not self.args.accept,
+                                      research=self.args.research)
         self.discuss(prompt, self.stages["plan"])
 
     def write_tests(self) -> None:
