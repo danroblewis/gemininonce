@@ -8,7 +8,7 @@ then a test plan, then tests, then code.
 ## Install
 
 ```sh
-uv tool install git+https://github.com/danroblewis/gemininonce     # or: pip install -e <clone>
+uv tool install git+https://github.com/danroblewis/geminonce     # or: pip install -e <clone>
 ```
 
 It uses your installed Google Chrome. Without Chrome, run `playwright install chromium` once.

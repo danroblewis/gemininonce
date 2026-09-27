@@ -3,7 +3,7 @@
 ## Installing from a clone
 
 ```sh
-git clone https://github.com/danroblewis/gemininonce
+git clone https://github.com/danroblewis/geminonce
 cd geminonce && uv venv && uv pip install -e . pytest
 ```
 
@@ -12,7 +12,7 @@ Use an **editable** install (`-e`). A plain `pip install .` copies the code, so 
 ## Updating
 
 ```sh
-uv tool install --reinstall git+https://github.com/danroblewis/gemininonce   # installed from GitHub
+uv tool install --reinstall git+https://github.com/danroblewis/geminonce   # installed from GitHub
 git pull                                                                      # editable install from a clone
 ```
 
@@ -28,7 +28,7 @@ uvx, keep `--refresh-package geminonce` in the command (see below).
 uvx --refresh-package geminonce --from ~/geminonce geminonce src/ tests/ -t "pytest -x"
 
 # from GitHub
-uvx --refresh-package geminonce --from git+https://github.com/danroblewis/gemininonce geminonce src/ tests/ -t "pytest -x"
+uvx --refresh-package geminonce --from git+https://github.com/danroblewis/geminonce geminonce src/ tests/ -t "pytest -x"
 
 # with your own Chrome login and a required account
 uvx --refresh-package geminonce --from ~/geminonce geminonce src/ tests/ -t "pytest -x" \
