@@ -139,6 +139,40 @@ isn't available, it exits and lists the models Gemini offers.
 Other options: `--root` sets the project root that paths are relative to, and
 `--cdp http://127.0.0.1:9222` attaches to a Chrome you started with `--remote-debugging-port=9222`.
 
+## Build from an idea: spec → tests → code (spike)
+
+```sh
+gemininonce build "A module roman.py with to_roman(n) and from_roman(s) for 1..3999, \
+  raising ValueError on bad input" --dir roman
+```
+
+It works in three stages. Each one gets its own fresh Gemini conversation, and each is only allowed
+to write its own files:
+
+1. **Spec.** Gemini writes `SPEC.md`: goal, numbered testable requirements (R1, R2, …), the exact
+   interface, examples, edge cases, and what's out of scope. It's sent back if the numbered
+   requirements are missing.
+2. **Tests.** From the spec, Gemini writes tests under `tests/`. They must compile, and they must
+   **fail**: tests that pass before any code exists don't test anything, so they're sent back.
+3. **Code.** The normal fix loop runs until the tests pass. `SPEC.md` and `tests/` are **locked**:
+   Gemini can't make the tests pass by changing them. An attempt is rejected, and Gemini is told to
+   change the implementation instead.
+
+After stages 1 and 2 you review the result. Press Enter to accept, `e` to edit it yourself in
+`$EDITOR`, or type what Gemini should change. `--accept` skips the reviews, and it's required
+without a terminal.
+
+Other options:
+- `-t` sets the test command (default `python -m pytest -q`). Gemini is told what it is.
+- `--spec` and `--tests-dir` rename the spec file and the tests folder.
+- `--from tests` or `--from code` restarts at a later stage and reuses the earlier files, e.g. after
+  editing the spec yourself.
+- All the usual options work: `--anonymous`, `--chrome-profile`, `--model`, the cost lines, and so on.
+
+In a live anonymous test, the example above went from an empty folder to a spec with 7 numbered
+requirements, 7 matching tests, and a correct implementation (checked on all of 1–3999 and on
+malformed numerals). That took 3 messages, about $0.005 at API prices.
+
 ## Cost estimate
 
 Gemini web is flat-rate on a personal or Workspace plan, so a run costs nothing extra. The tool

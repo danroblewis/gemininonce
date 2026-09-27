@@ -31,13 +31,8 @@ class HelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
         return super()._get_help_string(action)
 
 
-def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(prog="gemininonce", description="Fix code with Gemini web in a test loop.",
-                                 formatter_class=HelpFormatter)
-    ap.add_argument("paths", nargs="+", help="files and/or directories to send to Gemini")
-    ap.add_argument("-t", "--test", help="command that must pass (exit 0), e.g. 'pytest -x'")
-    ap.add_argument("-m", "--message", default="", help="what you want done (optional if --test fails)")
-    ap.add_argument("--root", default=".", help="project root; paths in replies are relative to it")
+def add_session_options(ap: argparse.ArgumentParser) -> None:
+    """Options shared by every command: the loop's limits, and how we reach Gemini."""
     ap.add_argument("-n", "--max-iters", type=int, default=20, help="hard cap on rounds")
     ap.add_argument("--price", default=os.environ.get("GEMININONCE_PRICE"), metavar="IN,OUT",
                     help="API price in USD per 1M input,output tokens for the cost estimate "
@@ -60,11 +55,22 @@ def build_parser() -> argparse.ArgumentParser:
                     help="use signed-out Gemini (free tier) in a throwaway profile: no account, no copied "
                          "Chrome data; conversations should be treated as public")
     ap.add_argument("-y", "--yes", action="store_true", help="skip the --anonymous confirmation")
-    ap.add_argument("--allow-new-files", action="store_true",
-                    help="let Gemini create files without asking (they're often hallucinated paths)")
     ap.add_argument("--show", action="store_true", help="show the browser window (hidden by default)")
     ap.add_argument("-v", "--verbose", action="store_true", help="print full code and outputs in the transcript")
     ap.add_argument("--cdp", help="attach to an already-running Chrome, e.g. http://127.0.0.1:9222")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(prog="gemininonce", description="Fix code with Gemini web in a test loop. "
+                                 "(Also: `gemininonce build IDEA` writes a spec, tests, then the code.)",
+                                 formatter_class=HelpFormatter)
+    ap.add_argument("paths", nargs="+", help="files and/or directories to send to Gemini")
+    ap.add_argument("-t", "--test", help="command that must pass (exit 0), e.g. 'pytest -x'")
+    ap.add_argument("-m", "--message", default="", help="what you want done (optional if --test fails)")
+    ap.add_argument("--root", default=".", help="project root; paths in replies are relative to it")
+    ap.add_argument("--allow-new-files", action="store_true",
+                    help="let Gemini create files without asking (they're often hallucinated paths)")
+    add_session_options(ap)
     return ap
 
 
@@ -121,6 +127,9 @@ def profile_dir_for(args) -> Path:
 
 
 def main() -> int:
+    if sys.argv[1:2] == ["build"]:
+        from .pipeline import main as build_main
+        return build_main(sys.argv[2:])
     args = build_parser().parse_args()
     if args.chrome_profile == "list":
         for d, label in chrome_profiles.profiles().items():

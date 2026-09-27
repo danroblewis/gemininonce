@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 import time
 
+from playwright.sync_api import Error as PWError
 from playwright.sync_api import TimeoutError as PWTimeout
 
 from . import HOME, safety
@@ -100,7 +101,15 @@ class GeminiChat:
         self._load()
 
     def _load(self) -> None:
-        self.page.goto(GEMINI_URL)
+        for attempt in range(3):  # ride out a dropped connection
+            try:
+                self.page.goto(GEMINI_URL)
+                break
+            except PWError as e:
+                if attempt == 2 or "net::" not in str(e):
+                    raise
+                print(paint(f"  network error loading Gemini ({str(e).splitlines()[0][:80]}); retrying...", YELLOW))
+                time.sleep(3)
         try:
             self.page.wait_for_selector(SEL_INPUT, timeout=15_000)
         except PWTimeout:

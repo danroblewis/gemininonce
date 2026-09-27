@@ -61,6 +61,9 @@ class Workspace:
         self.hl = highlighter or Highlighter()
         self.known: set[str] = set()  # files the user chose to send; Gemini may re-read these freely
         self.written: list[str] = []  # files we changed, in order
+        # Optional write filter: guard(rel) returns why `rel` may not be written, or None to allow it.
+        # The build pipeline uses it to keep each stage to its own files (e.g. tests locked for coding).
+        self.guard = None
 
     # --- files --------------------------------------------------------------------------------
     def collect(self, targets: list[str]) -> dict[str, str]:
@@ -150,6 +153,9 @@ class Workspace:
         if not p.is_relative_to(self.root):
             print(paint(f"  REJECTED {rel}: outside project root", RED))
             return f"`{rel}` is outside the project; edit rejected."
+        if self.guard and (why := self.guard(str(p.relative_to(self.root)))):
+            print(paint(f"  REJECTED {rel}: {why}", RED))
+            return f"`{rel}` was not written: {why}."
         if not content.endswith("\n"):
             content += "\n"
         old = p.read_text() if p.exists() else None

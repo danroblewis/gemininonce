@@ -111,3 +111,67 @@ def failure_prompt(test_cmd: str, code: int, out: str, notes, results, stalled: 
         "Fix it." if not stalled else "That did not change the failure at all. Try a different approach.",
         RULES,
     ])
+
+
+# --- build pipeline: spec -> tests -> code ----------------------------------------------------
+def _context(files: dict[str, str], layout: str) -> list[str]:
+    return [layout, "EXISTING FILES:\n\n" + "\n\n".join(f"FILE: {rel}\n{fenced(t)}" for rel, t in files.items())
+            if files else ""]
+
+
+def spec_prompt(idea: str, spec_path: str, test_cmd: str, files: dict[str, str], layout: str) -> str:
+    return "\n\n".join(filter(None, [
+        "You are writing a SPECIFICATION, not code. It will be reviewed by the user, then turned into "
+        "tests, then into an implementation, by separate steps that only see what you write here.",
+        f"IDEA: {idea}",
+        f"Write it as Markdown to `FILE: {spec_path}`. Keep it concise, with these sections:\n"
+        "- Goal: one to three sentences.\n"
+        "- Requirements: a numbered list of concrete, testable behaviors (R1, R2, ...). Each one should "
+        "become at least one test.\n"
+        "- Interface: the exact public names: files/modules, functions and classes with signatures, "
+        "CLI commands and arguments, return values, exceptions raised.\n"
+        "- Examples: concrete input -> output pairs.\n"
+        "- Edge cases and errors.\n"
+        "- Out of scope.",
+        f"Tests will be run with `{test_cmd}`, so name modules so the tests can import them.",
+        *_context(files, layout),
+        RULES,
+    ]))
+
+
+def tests_prompt(spec: str, spec_path: str, test_cmd: str, tests_dir: str, files: dict[str, str],
+                 layout: str) -> str:
+    return "\n\n".join(filter(None, [
+        "You are writing TESTS for code that does not exist yet (test-first). The specification below "
+        "was agreed with the user.",
+        f"- Tests run with `{test_cmd}`. Put every test file under `{tests_dir}/`.\n"
+        "- Cover every numbered requirement and every example; one focused test per behavior, named "
+        "after it (e.g. test_r3_rejects_empty_input).\n"
+        "- Import the code exactly as named in the spec's Interface section.\n"
+        "- Do NOT write the implementation, stubs, or mocks of the code under test: these tests must "
+        "fail until the implementation exists.",
+        f"{spec_path}:\n{fenced(spec)}",
+        *_context(files, layout),
+        RULES,
+    ]))
+
+
+def tests_problems_prompt(problems: list[str], notes, test_out: str) -> str:
+    return "\n\n".join(filter(None, [
+        "The tests need another pass:\n" + "\n".join(f"- {p}" for p in problems),
+        *notes,
+        f"Test output:\n{fenced(test_out)}" if test_out else "",
+        "Send the corrected test files in full.",
+        RULES,
+    ]))
+
+
+def revise_prompt(what: str, feedback: str) -> str:
+    return "\n\n".join([f"The user reviewed the {what} and asks for these changes:\n{feedback}",
+                        "Send the complete updated file(s).", RULES])
+
+
+def implement_message(spec_path: str, tests_dir: str) -> str:
+    return (f"Implement the project described in {spec_path} so that all tests pass. {spec_path} and the "
+            f"tests in {tests_dir}/ were agreed with the user and are locked: don't change them. If a test "
+            f"looks wrong, say so in your reply instead of working around it.")
