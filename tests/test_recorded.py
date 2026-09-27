@@ -10,7 +10,7 @@ from conftest import RECORDED, load_recording, session_rounds
 
 from gemininonce import loop as loop_module
 from gemininonce import protocol
-from gemininonce.gemini import EXTRACT_JS
+from gemininonce.gemini import EXTRACT_JS, EXTRACT_MD_JS
 from gemininonce.loop import FixLoop
 from gemininonce.merge import looks_partial
 from gemininonce.transcript import Transcript
@@ -76,6 +76,36 @@ def test_extract_js_reads_recorded_reply_html(page, name):
     rec = load_recording(name)
     page.set_content(rec["html"])
     assert page.locator("message-content").first.evaluate(EXTRACT_JS) == rec["blocks"]
+
+
+@pytest.mark.parametrize("name", ALL_RECORDINGS)
+def test_markdown_extraction_keeps_text_and_code_of_recorded_replies(page, name):
+    rec = load_recording(name)
+    page.set_content(rec["html"])
+    md = page.locator("message-content").first.evaluate(EXTRACT_MD_JS)
+    code_blocks = [b for b in rec["blocks"] if b["kind"] == "code"]
+    assert md.count("```") >= 2 * len(code_blocks)
+    for b in code_blocks:
+        assert b["text"].strip().splitlines()[0] in md
+    for path, _ in protocol.parse_reply(rec["blocks"])[0]:
+        assert f"FILE: {path}" in md.replace("`", "")
+
+
+def test_markdown_extraction_of_a_formatted_spec(page):
+    page.set_content("""<message-content><div class="markdown"><h1>Roman: Specification</h1>
+        <p>Uses <strong>strict</strong> parsing via <code>from_roman()</code>.</p><h2>4. Interface</h2>
+        <code-block><div class="code-block-decoration"><span>Python</span><button>Copy</button></div>
+        <pre><code>def to_roman(n: int) -&gt; str: ...\n</code></pre></code-block>
+        <h2>6. Requirements</h2><ol><li><p><strong>R1</strong>: converts 1..3999</p>
+        <ul><li>Acceptance: <code>to_roman(4) == "IV"</code></li></ul></li></ol>
+        <table><tr><th>in</th><th>out</th></tr><tr><td>4</td><td>IV</td></tr></table>
+        <p>Done.<source-inline-chip>[1] wikipedia</source-inline-chip></p></div></message-content>""")
+    md = page.locator("message-content").first.evaluate(EXTRACT_MD_JS)
+    assert md == ("# Roman: Specification\n\nUses **strict** parsing via `from_roman()`.\n\n## 4. Interface\n\n"
+                  "```python\ndef to_roman(n: int) -> str: ...\n```\n\n## 6. Requirements\n\n"
+                  "1. **R1**: converts 1..3999\n   - Acceptance: `to_roman(4) == \"IV\"`\n\n"
+                  "| in | out |\n| --- | --- |\n| 4 | IV |\n\nDone.\n")
+    assert protocol.spec_document("Some preface.\n\n" + md).startswith("# Roman: Specification")
 
 
 # --- parsing real replies -------------------------------------------------------------------
@@ -258,3 +288,17 @@ def test_gemini_timeout_is_retried_not_fatal(no_input):
     chat.ask = flaky_ask
     (edits, _, _), printed = quiet(FixLoop(chat, None, Transcript()).ask_for_code, "PROMPT")
     assert edits and calls == ["PROMPT", "PROMPT"] and "never started a response" in printed
+
+
+def test_dunder_file_names_survive_markdown_bold(page):
+    """`__init__.py` in Gemini's markdown renders as <strong>init</strong>.py; we must still read the name."""
+    page.set_content("""<message-content><div class="markdown">
+        <p><strong>FILE:</strong> pkg/<strong>init</strong>.py</p>
+        <code-block><pre><code>x = 1\n</code></pre></code-block>
+        <p>FILE: pkg/<em>main</em>.py</p><code-block><pre><code>y = 2\n</code></pre></code-block>
+        <p>This is <strong>important</strong>.</p></div></message-content>""")
+    blocks = page.locator("message-content").first.evaluate(EXTRACT_JS)
+    edits, _, _ = protocol.parse_reply(blocks)
+    assert [path for path, _ in edits] == ["pkg/__init__.py", "pkg/_main_.py"]
+    md = page.locator("message-content").first.evaluate(EXTRACT_MD_JS)
+    assert "pkg/__init__.py" in md and "This is **important**." in md

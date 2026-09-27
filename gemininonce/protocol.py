@@ -157,6 +157,32 @@ Decisions you made that the user didn't specify, so they can confirm or change t
 """
 
 
+SPEC_RULES = """\
+HOW TO REPLY: the specification is your reply itself, written as a normal Markdown answer (headings, lists,
+code blocks for signatures). Start it with its `# ` title heading and put nothing after it. Don't use a
+FILE: block and don't wrap it in a code block. To look at a project file first, reply with only
+`READ: <relative/path>` lines. To ask the user questions, reply with only the questions.
+"""
+
+
+def spec_document(markdown: str) -> str | None:
+    """The spec inside a reply: from its first heading (preferably the `# ` title) to the end, if the
+    reply looks like a spec at all (a heading plus requirements or an interface); else None."""
+    lines = markdown.splitlines()
+    starts = [i for i, ln in enumerate(lines) if ln.startswith("# ")] or \
+             [i for i, ln in enumerate(lines) if re.match(r"#{1,6} ", ln)]
+    if not starts:
+        return None
+    doc = "\n".join(lines[starts[0]:]).strip() + "\n"
+    return doc if re.search(r"requirement|interface|^\W*R1\b", doc, re.I | re.M) else None
+
+
+def blocks_markdown(blocks: list[dict]) -> str:
+    """Rough Markdown from extracted blocks (when the rendered-DOM version isn't available)."""
+    return "\n\n".join(b["text"].strip() if b["kind"] == "text" else fenced(b["text"], b.get("lang", "").lower())
+                        for b in blocks) + "\n"
+
+
 def _context(files: dict[str, str], layout: str) -> list[str]:
     return [layout, "EXISTING FILES:\n\n" + "\n\n".join(f"FILE: {rel}\n{fenced(t)}" for rel, t in files.items())
             if files else ""]
@@ -173,16 +199,16 @@ def spec_prompt(idea: str, spec_path: str, test_cmd: str, files: dict[str, str],
         "or exception. After that, an implementer writes code to pass those tests. So the spec has to "
         "contain the whole design: architecture, interfaces and behavior. A thin spec produces thin tests "
         "and the wrong program.",
-        f"Write it as Markdown to `FILE: {spec_path}`, following this template. Keep every section, and "
-        f"be concrete and complete rather than brief:\n{fenced(SPEC_TEMPLATE, 'markdown')}",
+        f"Follow this template (it's saved as {spec_path}). Keep every section, and be concrete and complete "
+        f"rather than brief:\n{fenced(SPEC_TEMPLATE, 'markdown')}",
         f"Tests will be run exactly as `{test_cmd}` from the project root, so choose module names and a "
         "layout the tests can import when run that way.",
         ("If the idea leaves decisions open that would change the design, you may first ask the user up to 5 "
-         "short numbered questions, in a reply with no FILE: block. Otherwise write the spec, and list what "
-         "you decided in section 10." if may_ask else
+         "short numbered questions, in a reply with only the questions. Otherwise write the spec, and list "
+         "what you decided in section 10." if may_ask else
          "Don't ask questions: make reasonable decisions and list them in section 10."),
         *_context(files, layout),
-        RULES,
+        SPEC_RULES,
     ]))
 
 
@@ -194,20 +220,23 @@ def spec_self_review_prompt(spec_path: str) -> str:
         "missing or vague names, signatures, argument order, types, return values, data formats, error "
         "behavior, ordering, and requirements without checkable acceptance criteria. Also list anything "
         "that contradicts itself.",
-        f"Then send the complete revised {spec_path} that resolves every point (record the decisions you "
-        "made in section 10).",
-        RULES,
+        "Then write the complete revised specification that resolves every point (record the decisions "
+        "you made in section 10), starting with its `# ` title heading, with nothing after it.",
+        SPEC_RULES,
     ])
 
 
-def discussion_prompt(what: str, paths: list[str], user_text: str) -> str:
-    """The user's reply while reviewing a stage's files (spec or tests)."""
+def discussion_prompt(what: str, paths: list[str], user_text: str, document: bool = False) -> str:
+    """The user's reply while reviewing a stage's files. document: the stage's file is the reply itself
+    (the spec), not FILE: blocks."""
     files = ", ".join(paths) or f"the {what}"
+    how = (f"reply with the complete updated {what}, starting with its `# ` title heading" if document else
+           f"send the complete updated {files} with FILE: blocks (the whole file, not just the changes)")
     return "\n\n".join([
         f"The user says:\n{user_text}",
         f"Answer any questions briefly and ask your own if something is still unclear. If this changes the "
-        f"{what}, send the complete updated {files} with FILE: blocks (the whole file, not just the changes).",
-        RULES,
+        f"{what}, {how}.",
+        SPEC_RULES if document else RULES,
     ])
 
 
@@ -241,10 +270,10 @@ def tests_problems_prompt(problems: list[str], notes, test_out: str) -> str:
 
 def spec_problems_prompt(problems: list[str], notes, spec_path: str) -> str:
     return "\n\n".join(filter(None, [
-        f"{spec_path} isn't complete yet:\n" + "\n".join(f"- {p}" for p in problems),
+        f"The specification isn't complete yet:\n" + "\n".join(f"- {p}" for p in problems),
         *notes,
-        f"Send the complete updated {spec_path}.",
-        RULES,
+        "Reply with the complete updated specification, starting with its `# ` title heading.",
+        SPEC_RULES,
     ]))
 
 

@@ -154,6 +154,10 @@ to write its own files:
    methods, functions, exceptions), data model, numbered requirements with acceptance criteria,
    examples, errors, measurable non-functional requirements, and its assumptions. It's told that
    the test writer will see *only* this file, so nothing may be left to guess.
+   - **The spec is Gemini's answer itself,** not a `FILE:` block. A spec has code blocks in it,
+     and Gemini's page can't show a code block inside another one. The rendered answer is converted
+     back to Markdown (headings, lists, code blocks, tables) and saved as `SPEC.md`, starting from
+     its `# ` title. A reply that isn't a spec, such as questions for you, is treated as conversation.
    - **Automatic checks:** a spec without numbered requirements, an Interface section written as
      code, or an Architecture section goes straight back to Gemini.
    - **Self-review:** Gemini then re-reads its spec as the test writer would, lists everything it

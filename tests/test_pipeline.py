@@ -34,10 +34,12 @@ class ScriptedChat:
         self.replies, self.sent, self.usage, self.new_chats = list(replies), [], Usage(), 0
 
     def ask(self, text):
+        """A reply is either blocks, or a string: a whole Markdown answer (like a spec written as the reply)."""
         self.sent.append(text)
         r = self.replies.pop(0)
         self.usage.record(len(text), 100)
-        return r
+        self.last_markdown = r if isinstance(r, str) else ""
+        return [{"kind": "text", "text": r}] if isinstance(r, str) else r
 
     def new_chat(self):
         self.new_chats += 1
@@ -151,3 +153,26 @@ def test_signed_out_keeps_flash_lite_and_explains(build, tmp_path):
     chat.signed_out = True
     _, printed = run_quiet(b.write_spec)
     assert "only Flash-Lite is available" in printed and not getattr(chat, "models", [])
+
+
+def test_spec_written_as_the_reply_itself_is_saved_from_its_title(build, tmp_path):
+    """Gemini can't put a spec with code blocks inside one FILE: code block, so it answers with the spec
+    as its reply; anything before the `# ` title (e.g. its self-review notes) is dropped."""
+    answer = "Issues I found:\n1. R1 had no acceptance criteria\n\n" + SPEC
+    b, chat, _ = build([answer])
+    run_quiet(b.write_spec)
+    assert (tmp_path / "SPEC.md").read_text() == SPEC
+    assert "the specification is your reply itself" in chat.sent[0]  # not a FILE: block
+
+
+def test_long_questions_are_shown_in_full(build, tmp_path, monkeypatch):
+    questions = "Before I write the spec I need to know:\n" + "\n".join(f"{i}. Question {i}?" for i in range(1, 16))
+    b, chat, _ = build([questions, SPEC])
+    b.args.accept = False
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    answers = iter(["answers: yes to all", ""])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    _, printed = run_quiet(b.write_spec)
+    assert "Question 15?" in printed and "Gemini's full message" in printed
+    assert chat.sent[1].startswith("The user says:\nanswers: yes to all")
+    assert (tmp_path / "SPEC.md").read_text() == SPEC

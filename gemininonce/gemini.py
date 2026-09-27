@@ -30,6 +30,20 @@ SIGN_IN_URL = "https://accounts.google.com/ServiceLogin?continue=" + GEMINI_URL
 EXTRACT_JS = """
 (root) => {
   const out = [];
+  // Markdown turns `__init__.py` into <strong>init</strong>.py, so innerText loses the underscores.
+  // In lines naming files (FILE:/READ:), put them back for emphasized words followed by a dot.
+  const underscored = n => {
+    const t = n.textContent, next = n.nextSibling ? n.nextSibling.textContent || '' : '';
+    if (!/^\\w+$/.test(t) || !/^\\.\\w/.test(next)) return t;  // a file extension, not the end of a sentence
+    return (n.tagName === 'STRONG' || n.tagName === 'B') ? '__' + t + '__' : '_' + t + '_';
+  };
+  const markerText = el => Array.from(el.childNodes).map(n => {
+    if (n.nodeType === 3) return n.textContent;
+    if (n.nodeType !== 1) return '';
+    if (/^(STRONG|B|EM|I)$/.test(n.tagName)) return underscored(n);
+    if (n.tagName === 'BR') return '\\n';
+    return markerText(n) + (/^(P|LI|DIV)$/.test(n.tagName) ? '\\n' : '');
+  }).join('');
   const isCode = el => el.tagName === 'PRE' || el.tagName === 'CODE-BLOCK';
   const walk = el => {
     for (const c of el.children) {
@@ -41,7 +55,9 @@ EXTRACT_JS = """
         walk(c);
       } else {
         const t = c.innerText;
-        if (t && t.trim()) out.push({kind: 'text', text: t});
+        if (t && t.trim()) out.push({kind: 'text',
+                                     text: /\\b(FILE|READ)\\b/.test(t) && c.querySelector('strong, b, em, i')
+                                           ? markerText(c).trim() : t});
       }
     }
   };
@@ -53,6 +69,82 @@ EXTRACT_JS = """
 
 class GeminiTimeout(TimeoutError):
     """Gemini didn't start or finish a reply in time (a screenshot is saved as last_error.png)."""
+
+# The rendered reply converted back to Markdown (headings, lists, code blocks, tables, inline code),
+# for replies that ARE the document (the build's spec) rather than FILE: blocks. Citation chips are
+# dropped.
+EXTRACT_MD_JS = """
+(root) => {
+  const SKIP = new Set(['SOURCE-FOOTNOTE', 'SOURCE-INLINE-CHIP', 'SOURCES-CAROUSEL-INLINE', 'BUTTON', 'MAT-ICON']);
+  const BLOCK = 'p, h1, h2, h3, h4, h5, h6, ul, ol, pre, code-block, table, blockquote, hr';
+  const inlineNode = n => {
+    if (n.nodeType === 3) return n.textContent;
+    if (n.nodeType !== 1 || SKIP.has(n.tagName)) return '';
+    const t = n.tagName;
+    if (t === 'CODE') return '`' + n.textContent + '`';
+    const next = n.nextSibling ? n.nextSibling.textContent || '' : '';
+    const dunder = /^\\w+$/.test(n.textContent) && /^\\.\\w/.test(next);  // `__init__.py` rendered as bold
+    if (t === 'STRONG' || t === 'B') return dunder ? '__' + n.textContent + '__' : '**' + inline(n) + '**';
+    if (t === 'EM' || t === 'I') return dunder ? '_' + n.textContent + '_' : '*' + inline(n) + '*';
+    if (t === 'BR') return '\\n';
+    return inline(n);
+  };
+  const inline = el => Array.from(el.childNodes).map(inlineNode).join('');
+  const fenced = el => {
+    const code = el.querySelector('code') || el.querySelector('pre') || el;
+    const label = el.querySelector('.code-block-decoration span');
+    const lang = label ? label.innerText.trim().toLowerCase().replace(/\\s+/g, '') : '';
+    const body = code.innerText.replace(/\\n$/, '');
+    let fence = '```';
+    while (body.includes(fence)) fence += '`';
+    return fence + lang + '\\n' + body + '\\n' + fence;
+  };
+  const list = (ul, depth) => {
+    let n = +(ul.getAttribute('start') || 1);
+    const pad = '   '.repeat(depth), lines = [];
+    for (const li of ul.children) {
+      if (li.tagName !== 'LI') continue;
+      let text = '';
+      const extra = [];
+      for (const c of li.childNodes) {
+        if (c.nodeType === 1 && (c.tagName === 'UL' || c.tagName === 'OL')) extra.push(list(c, depth + 1));
+        else if (c.nodeType === 1 && (c.tagName === 'PRE' || c.tagName === 'CODE-BLOCK'))
+          extra.push(fenced(c).split('\\n').map(l => pad + '   ' + l).join('\\n'));
+        else text += inlineNode(c) + (c.nodeType === 1 && c.tagName === 'P' ? ' ' : '');
+      }
+      const bullet = ul.tagName === 'OL' ? (n++) + '.' : '-';
+      lines.push(pad + bullet + ' ' + text.trim().replace(/\\s*\\n\\s*/g, ' '), ...extra);
+    }
+    return lines.join('\\n');
+  };
+  const table = tb => {
+    const rows = Array.from(tb.querySelectorAll('tr')).map(tr =>
+      Array.from(tr.children).map(td => inline(td).trim().replace(/\\|/g, '\\\\|')));
+    if (!rows.length) return '';
+    const out = ['| ' + rows[0].join(' | ') + ' |', '|' + rows[0].map(() => ' --- |').join('')];
+    for (const r of rows.slice(1)) out.push('| ' + r.join(' | ') + ' |');
+    return out.join('\\n');
+  };
+  const out = [];
+  const walk = el => {
+    for (const c of el.children) {
+      const t = c.tagName;
+      if (SKIP.has(t)) continue;
+      if (/^H[1-6]$/.test(t)) out.push('#'.repeat(+t[1]) + ' ' + inline(c).trim());
+      else if (t === 'P') { const s = inline(c).trim(); if (s) out.push(s); }
+      else if (t === 'UL' || t === 'OL') out.push(list(c, 0));
+      else if (t === 'PRE' || t === 'CODE-BLOCK') out.push(fenced(c));
+      else if (t === 'TABLE') out.push(table(c));
+      else if (t === 'BLOCKQUOTE') out.push(inline(c).trim().split('\\n').map(l => '> ' + l).join('\\n'));
+      else if (t === 'HR') out.push('---');
+      else if (c.querySelector(BLOCK)) walk(c);
+      else { const s = inline(c).trim(); if (s) out.push(s); }
+    }
+  };
+  walk(root);
+  return out.join('\\n\\n') + '\\n';
+}
+"""
 
 
 def model_key(name: str) -> str:
@@ -74,6 +166,7 @@ class GeminiChat:
         self.anonymous = anonymous
         self.model = model  # resolved to the picker's exact name by select_model()
         self.usage = Usage()
+        self.last_markdown = ""  # the latest reply as Markdown (see EXTRACT_MD_JS)
         self._connect()
 
     @property
@@ -234,8 +327,10 @@ class GeminiChat:
 
     # --- messages -----------------------------------------------------------------------------
     def ask(self, text: str, timeout: float = 600) -> list[dict]:
-        """Send a message and return the reply as text/code blocks (see EXTRACT_JS)."""
+        """Send a message and return the reply as text/code blocks (see EXTRACT_JS). The same reply as
+        Markdown is left in self.last_markdown."""
         page = self.page
+        self.last_markdown = ""
         # re-check every time: a session can expire or switch mid-run
         self.check_signed_out() if self.anonymous else self.check_account()
         if self.model and model_key(self.current_model()) != model_key(self.model):
@@ -275,6 +370,7 @@ class GeminiChat:
 
         body = last.locator(SEL_RESPONSE_BODY).first
         (HOME / "last_response.html").write_text(body.evaluate("e => e.outerHTML"))
+        self.last_markdown = body.evaluate(EXTRACT_MD_JS)
         return body.evaluate(EXTRACT_JS)
 
     def _timeout(self, what: str):

@@ -81,7 +81,8 @@ class Build:
     def __init__(self, args, ws: Workspace, chat, transcript: Transcript):
         self.args, self.ws, self.chat = args, ws, chat
         self.transcript = transcript  # for the code stage
-        self.quiet_transcript = Transcript(transcript.verbose, transcript.hl, preview=0)  # files shown in full
+        # Stage files are shown in full (then as diffs) by the review, so the transcript only previews them.
+        self.quiet_transcript = Transcript(transcript.verbose, transcript.hl, preview=0, prose_lines=8)
         self.spec = args.spec
         self.tests_dir = args.tests_dir.rstrip("/")
         self.last_test_out = ""
@@ -107,6 +108,13 @@ class Build:
             if reads and not edits:  # it wants to look at project files first
                 prompt = protocol.read_reply(*self.ws.read_files(reads))
                 continue
+            if what == "spec" and not edits:  # the spec is the reply itself (a FILE: block can't hold its code blocks)
+                markdown = getattr(self.chat, "last_markdown", "") or protocol.blocks_markdown(blocks)
+                if (doc := protocol.spec_document(markdown)):
+                    edits = [(self.spec, doc)]
+                elif self.quiet_transcript.truncated:  # a long message for the user, not a spec: show all of it
+                    print(paint("\n── Gemini's full message " + "─" * 35, YELLOW, BOLD))
+                    print(self.ws.hl.code(markdown.rstrip(), self.ws.hl.lexer_for(markdown, "reply.md")))
             if not edits and len(prose.strip()) < 300 and protocol.GEMINI_ERROR.search(prose) \
                     and errors < self.args.retries:  # a Gemini error, not a question for the user
                 errors += 1
@@ -138,13 +146,13 @@ class Build:
                     sys.exit(f"The {what} still had problems after {attempts} tries; stopping.")
                 attempts += 1
                 prompt = protocol.discussion_prompt(what, written, "Don't ask questions: make reasonable decisions, "
-                                                    "note them in the file, and write it now.")
+                                                    "note them in the file, and write it now.", what == "spec")
                 continue
             answer = self.ask_user_about(what, written, problems)
             if answer is None:
                 return written
             attempts = 0
-            prompt = protocol.discussion_prompt(what, written, answer)
+            prompt = protocol.discussion_prompt(what, written, answer, what == "spec")
 
     def ask_user_about(self, what: str, written: list[str], problems: list[str]) -> str | None:
         """The user's reply for Gemini, or None once they accept."""

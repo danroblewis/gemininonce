@@ -18,10 +18,13 @@ class Transcript:
     """verbose prints code and outputs in full instead of shortening them. preview: how many lines of a
     long code block to show (0 = just a one-line summary, for files that get shown in full elsewhere)."""
 
-    def __init__(self, verbose: bool = False, highlighter: Highlighter | None = None, preview: int = 12):
+    def __init__(self, verbose: bool = False, highlighter: Highlighter | None = None, preview: int = 12,
+                 prose_lines: int | None = None):
         self.verbose = verbose
         self.hl = highlighter or Highlighter()
         self.preview = preview
+        self.prose_lines = prose_lines  # cap on a reply's text lines (None: all), e.g. when it IS the spec
+        self.truncated = False  # whether the last reply was cut short
 
     def outgoing(self, msg: str) -> None:
         """Print our message: rules dropped, attached files listed by name, long outputs shortened."""
@@ -51,17 +54,25 @@ class Transcript:
 
     def reply(self, blocks: list[dict]) -> None:
         print(paint("\n── Gemini " + "─" * 50, MAGENTA, BOLD))
-        pending = None
+        limit = None if self.verbose else self.prose_lines
+        total = sum(len(b["text"].splitlines()) for b in blocks if b["kind"] == "text")
+        self.truncated = limit is not None and total > limit + 4
+        pending, shown = None, 0
         for b in blocks:
             if b["kind"] == "text":
-                for ln in b["text"].splitlines():
-                    print(paint(ln, YELLOW, BOLD) if MARKER.match(ln) else paint(ln, MAGENTA))
                 for marker in markers(b["text"]):
                     if marker[0] != "READ":
                         pending = marker
+                for ln in b["text"].splitlines():
+                    if not (self.truncated and shown >= limit):
+                        print(paint(ln, YELLOW, BOLD) if MARKER.match(ln) else paint(ln, MAGENTA))
+                        shown += 1
             else:
-                self._code_block(b, *(pending or (None, None)))
+                if not (self.truncated and shown >= limit):
+                    self._code_block(b, *(pending or (None, None)))
                 pending = None
+        if self.truncated:
+            print(paint(f"  ... ({total - limit} more lines)", DIM))
 
     def _code_block(self, block: dict, kind: str | None, path: str | None) -> None:
         code = block["text"].rstrip("\n")
