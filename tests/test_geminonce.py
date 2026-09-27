@@ -1,16 +1,16 @@
-"""Offline tests for gemininonce (no browser). Run with: pytest tests"""
+"""Offline tests for geminonce (no browser). Run with: pytest tests"""
 import io
 import sys
 
 import pytest
 
-from gemininonce import console, protocol
-from gemininonce.highlight import Highlighter
-from gemininonce.loop import signature
-from gemininonce.merge import looks_partial, merge_partial
-from gemininonce.safety import find_secrets, redact, scan_command, scan_edit
-from gemininonce.usage import Usage
-from gemininonce.workspace import Workspace
+from geminonce import console, protocol
+from geminonce.highlight import Highlighter
+from geminonce.loop import signature
+from geminonce.merge import looks_partial, merge_partial
+from geminonce.safety import find_secrets, redact, scan_command, scan_edit
+from geminonce.usage import Usage
+from geminonce.workspace import Workspace
 
 SERVICE = '''\
 from datetime import date
@@ -179,7 +179,7 @@ def test_each_conversation_only_resends_its_own_history():
 
 
 def test_sandbox_network_is_optional(tmp_path):
-    from gemininonce.safety import sandbox_argv
+    from geminonce.safety import sandbox_argv
     offline, online = sandbox_argv("true", tmp_path), sandbox_argv("true", tmp_path, network=True)
     if offline is None:
         pytest.skip("no sandbox on this machine")

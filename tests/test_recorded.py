@@ -8,14 +8,14 @@ import sys
 import pytest
 from conftest import RECORDED, load_recording, session_rounds
 
-from gemininonce import loop as loop_module
-from gemininonce import protocol
-from gemininonce.gemini import EXTRACT_JS, EXTRACT_MD_JS, SOURCES_JS
-from gemininonce.loop import FixLoop
-from gemininonce.merge import looks_partial
-from gemininonce.transcript import Transcript
-from gemininonce.usage import Usage
-from gemininonce.workspace import Workspace
+from geminonce import loop as loop_module
+from geminonce import protocol
+from geminonce.gemini import EXTRACT_JS, EXTRACT_MD_JS, SOURCES_JS
+from geminonce.loop import FixLoop
+from geminonce.merge import looks_partial
+from geminonce.transcript import Transcript
+from geminonce.usage import Usage
+from geminonce.workspace import Workspace
 
 ALL_RECORDINGS = sorted(p.stem for p in RECORDED.glob("*.json") if p.stem != "meta")
 PYTEST = f"{sys.executable} -m pytest -x -q -p no:cacheprovider"
@@ -274,7 +274,7 @@ def test_stuck_user_hint_is_sent_and_new_starts_fresh(todo_project, tmp_path, mo
 
 
 def test_gemini_timeout_is_retried_not_fatal(no_input):
-    from gemininonce.gemini import GeminiTimeout
+    from geminonce.gemini import GeminiTimeout
     chat = ReplayChat(["session-01"])
     real_ask = chat.ask
     calls = []
@@ -371,8 +371,8 @@ def test_links_keep_their_urls_and_cited_sources_are_collected(page):
 def test_blocked_message_box_is_reported_not_crashed(page, monkeypatch, tmp_path):
     """When something covers Gemini's input (your case: a notice or dialog), we reload once, then raise
     GeminiTimeout (which the loop retries) saying what the page shows, with a screenshot and the HTML."""
-    from gemininonce import gemini as gemini_module
-    from gemininonce.gemini import GeminiChat, GeminiTimeout
+    from geminonce import gemini as gemini_module
+    from geminonce.gemini import GeminiChat, GeminiTimeout
     monkeypatch.setattr(gemini_module, "HOME", tmp_path)
     monkeypatch.setattr(GeminiChat, "TYPE_TIMEOUT_MS", 500)
     page.set_content("""<div role="dialog">You've reached your limit for now. Sign in to continue.</div>
@@ -399,7 +399,7 @@ def test_links_through_google_search_and_self_links_are_cleaned(page):
 def test_visible_browser_shows_the_tab_that_is_working():
     """--show: each conversation brings its own tab to the front before sending (the reviewer's tab would
     otherwise hide the writer's and implementer's); a hidden browser leaves tabs alone."""
-    from gemininonce.gemini import GeminiChat
+    from geminonce.gemini import GeminiChat
     calls = []
 
     class Page:

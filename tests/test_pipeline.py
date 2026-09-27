@@ -5,13 +5,13 @@ import sys
 
 import pytest
 
-from gemininonce import loop as loop_module
-from gemininonce import protocol
-from gemininonce.highlight import Highlighter
-from gemininonce.pipeline import Build, build_parser
-from gemininonce.transcript import Transcript
-from gemininonce.usage import Usage
-from gemininonce.workspace import Workspace
+from geminonce import loop as loop_module
+from geminonce import protocol
+from geminonce.highlight import Highlighter
+from geminonce.pipeline import Build, build_parser
+from geminonce.transcript import Transcript
+from geminonce.usage import Usage
+from geminonce.workspace import Workspace
 
 SPEC = ("# Spec\n\n## 3. Architecture\nOne module, add.py.\n\n## 4. Interface\n```python\n"
         "def add(a: int, b: int) -> int: ...\n```\n\n## 6. Requirements\n- R1: add(a, b) returns a + b. "
@@ -227,7 +227,7 @@ def test_long_questions_are_shown_in_full(build, tmp_path, monkeypatch):
 
 def test_python_comments_in_the_interface_are_not_mistaken_for_headings():
     """`# pkg/core.py` inside an Interface code block is a comment, not the end of the section."""
-    from gemininonce.pipeline import spec_problems
+    from geminonce.pipeline import spec_problems
     spec = ("# Spec\n\n## 3. Architecture\npkg/\n\n## 4. Interface\n\n```python\n# pkg/core.py\n\n"
             "class Solver:\n    def solve(self, n: int) -> list[int]: ...\n```\n\n## 6. Requirements\n- R1: works\n")
     assert spec_problems(spec) == []
@@ -285,7 +285,7 @@ def test_no_research_skips_the_research_step(build, tmp_path):
 
 
 def test_sources_line_names_the_sites():
-    from gemininonce.transcript import sources_line
+    from geminonce.transcript import sources_line
     urls = ["https://docs.python.org/3/a", "https://www.pypi.org/p", "https://docs.python.org/3/b",
             "https://github.com/x", "https://en.wikipedia.org/w", "https://stackoverflow.com/q"]
     assert sources_line(urls) == ("sources: 6 (docs.python.org, pypi.org, github.com, en.wikipedia.org, "
@@ -293,7 +293,7 @@ def test_sources_line_names_the_sites():
 
 
 def test_inline_signatures_count_as_an_interface():
-    from gemininonce.pipeline import spec_problems
+    from geminonce.pipeline import spec_problems
     spec = ("# Spec\n\n## 3. Architecture\napp/\n\n## 4. Interface\n\n### `app/hn.py`\n\n"
             "- `class HNAPIError(Exception)`: raised on bad responses.\n"
             "- `async def fetch_top_story_ids(client: httpx.AsyncClient, limit: int = 10) -> list[int]`: top ids.\n"
@@ -324,7 +324,7 @@ def test_accept_mode_takes_a_flagged_spec_with_a_warning(build, tmp_path):
 
 
 def test_interface_must_cover_the_source_files_in_the_architecture():
-    from gemininonce.pipeline import source_files, spec_problems
+    from geminonce.pipeline import source_files, spec_problems
     spec = ("# Spec\n\n## 3. Architecture\n```\napp/\n├── __init__.py\n├── hn.py\nfrontend/src/\n├── main.tsx\n"
             "├── App.tsx\n└── components/StoryCard.tsx\nvite.config.ts\n```\n\n## 4. Interface\n\n"
             "- `def fetch_ids(limit: int) -> list[int]` (hn.py)\n- `App()` (App.tsx): the page\n\n"

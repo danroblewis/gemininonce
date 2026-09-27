@@ -1,4 +1,4 @@
-"""`gemininonce build`: idea -> SPEC.md -> test plan -> tests -> implementation.
+"""`geminonce build`: idea -> SPEC.md -> test plan -> tests -> implementation.
 
 Each stage runs in its own Gemini conversation and may only write its own files (Workspace.guard): the
 spec writer writes SPEC.md, the planner tests/TEST_PLAN.md, the test writer tests/unit/ and tests/e2e/,
@@ -31,7 +31,7 @@ STAGES = ("spec", "plan", "tests", "code", "readme")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(prog="gemininonce build", formatter_class=HelpFormatter,
+    ap = argparse.ArgumentParser(prog="geminonce build", formatter_class=HelpFormatter,
                                  description="Turn an idea into a spec, then tests, then code that passes them.")
     ap.add_argument("idea", nargs="?", default="", help="what to build (not needed with --from tests/code)")
     ap.add_argument("--dir", default=".", help="project directory (created if missing)")
@@ -553,7 +553,7 @@ def main(argv: list[str]) -> int:
     args = build_parser().parse_args(argv)
     root = Path(args.dir).resolve()
     if args.start == "spec" and not args.idea:
-        sys.exit("Say what to build: gemininonce build \"a CLI that ...\"")
+        sys.exit("Say what to build: geminonce build \"a CLI that ...\"")
     if args.start != "spec" and not (root / args.spec).exists():
         sys.exit(f"--from {args.start} needs an existing {root / args.spec}")
     plan = args.plan or f"{args.tests_dir.rstrip('/')}/TEST_PLAN.md"

@@ -12,16 +12,16 @@ from pathlib import Path
 
 import pytest
 
-from gemininonce import protocol
-from gemininonce.browser import Browser
-from gemininonce.gemini import GeminiChat
+from geminonce import protocol
+from geminonce.browser import Browser
+from geminonce.gemini import GeminiChat
 
 pytestmark = pytest.mark.e2e
 
 
 @pytest.fixture(scope="module")
 def chat():
-    profile = Path(tempfile.mkdtemp(prefix="gemininonce-anon-"))
+    profile = Path(tempfile.mkdtemp(prefix="geminonce-anon-"))
     browser = Browser(profile, headless=True)
     try:
         yield GeminiChat(browser, model="flash-lite", anonymous=True)
@@ -55,7 +55,7 @@ def test_cli_fixes_the_todo_app(todo_project):
     """The real command, start to finish: exit code 0 and the todo app's tests pass."""
     test_cmd = f"{sys.executable} -m pytest -x -q -p no:cacheprovider"
     env = {**os.environ, "NO_COLOR": "1"}
-    run = subprocess.run([sys.executable, "-m", "gemininonce", "todo", "tests", "-t", test_cmd, "--anonymous", "-y"],
+    run = subprocess.run([sys.executable, "-m", "geminonce", "todo", "tests", "-t", test_cmd, "--anonymous", "-y"],
                          cwd=todo_project, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True,
                          timeout=900)
     assert run.returncode == 0, run.stdout[-3000:] + run.stderr[-2000:]

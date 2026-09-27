@@ -1,7 +1,7 @@
-# `gemininonce build`: spec → test plan → tests → code → README
+# `geminonce build`: spec → test plan → tests → code → README
 
 ```sh
-gemininonce build "A module roman.py with to_roman(n) and from_roman(s) for 1..3999, \
+geminonce build "A module roman.py with to_roman(n) and from_roman(s) for 1..3999, \
   raising ValueError on bad input" --dir roman
 ```
 

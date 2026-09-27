@@ -19,19 +19,19 @@ import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).parent
-os.environ["GEMININONCE_HOME"] = tempfile.mkdtemp(prefix="gemininonce-record-")
+os.environ["GEMINONCE_HOME"] = tempfile.mkdtemp(prefix="geminonce-record-")
 
-from gemininonce import HOME, protocol  # noqa: E402
-from gemininonce.browser import Browser  # noqa: E402
-from gemininonce.gemini import GeminiChat  # noqa: E402
-from gemininonce.loop import FixLoop  # noqa: E402
-from gemininonce.transcript import Transcript  # noqa: E402
-from gemininonce.workspace import Workspace  # noqa: E402
+from geminonce import HOME, protocol  # noqa: E402
+from geminonce.browser import Browser  # noqa: E402
+from geminonce.gemini import GeminiChat  # noqa: E402
+from geminonce.loop import FixLoop  # noqa: E402
+from geminonce.transcript import Transcript  # noqa: E402
+from geminonce.workspace import Workspace  # noqa: E402
 
 # Plain `python` (the venv's, via PATH) and a fixed pytest temp dir, so no personal paths (home
 # directory, username) end up in the prompts we send or in the recorded fixtures.
 os.environ["PATH"] = f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}"
-TEST_CMD = "python -m pytest -x -q -p no:cacheprovider --basetemp=/tmp/gemininonce-pytest"
+TEST_CMD = "python -m pytest -x -q -p no:cacheprovider --basetemp=/tmp/geminonce-pytest"
 PERSONAL = [str(Path.home()), Path.home().name]
 NOISE_ATTRS = re.compile(r'\s(?:jslog|data-ved|decode-data-ved|data-hveid|_ngcontent-[\w-]+|_nghost-[\w-]+)="[^"]*"')
 
@@ -70,10 +70,10 @@ class Recorder:
 
 def main() -> int:
     sys.stdin = open(os.devnull)  # answer every prompt "no", exactly like the replay test does
-    outdir = Path(tempfile.mkdtemp(prefix="gemininonce-recorded-"))
-    project = Path(tempfile.mkdtemp(prefix="gemininonce-proj-", dir="/tmp")).resolve() / "todo_project"
+    outdir = Path(tempfile.mkdtemp(prefix="geminonce-recorded-"))
+    project = Path(tempfile.mkdtemp(prefix="geminonce-proj-", dir="/tmp")).resolve() / "todo_project"
     shutil.copytree(HERE / "fixtures/todo_project", project, ignore=shutil.ignore_patterns("__pycache__"))
-    profile = Path(tempfile.mkdtemp(prefix="gemininonce-anon-"))
+    profile = Path(tempfile.mkdtemp(prefix="geminonce-anon-"))
     browser = Browser(profile, headless=True)
     try:
         chat = GeminiChat(browser, model="flash-lite", anonymous=True)

@@ -1,4 +1,4 @@
-# gemininonce
+# geminonce
 
 A small coding agent that drives **Gemini in your browser**, with no API key and no tool calls. It
 sends your code and failing test output to Gemini, writes the files Gemini sends back, re-runs your
@@ -17,22 +17,22 @@ It uses your installed Google Chrome. Without Chrome, run `playwright install ch
 
 ```sh
 # Fix code until the tests pass
-gemininonce src/ tests/ -t "pytest -x"
+geminonce src/ tests/ -t "pytest -x"
 
 # Say what you want, too
-gemininonce app.py -t "npm test" -m "the date parser breaks on ISO week dates"
+geminonce app.py -t "npm test" -m "the date parser breaks on ISO week dates"
 
 # Build something new: spec -> test plan -> unit + e2e tests -> code (you settle each step with Gemini)
-gemininonce build "a constraint solver in python that can solve n-queens" --dir nqueens
+geminonce build "a constraint solver in python that can solve n-queens" --dir nqueens
 
 # Use your work Google account (reuses your Chrome login: SSO, 2FA)
-gemininonce src/ -t "pytest" --chrome-profile "Profile 2" --account @yourcompany.com
+geminonce src/ -t "pytest" --chrome-profile "Profile 2" --account @yourcompany.com
 
 # Signed-out, free-tier Gemini in a throwaway browser (treat everything sent as public)
-gemininonce src/ -t "pytest" --anonymous
+geminonce src/ -t "pytest" --anonymous
 
 # Unattended: the exit code says whether the tests pass
-until gemininonce src/ tests/ -t "pytest -x"; do :; done
+until geminonce src/ tests/ -t "pytest -x"; do :; done
 ```
 
 On the first run without `--chrome-profile` or `--anonymous`, a Chrome window opens so you can sign
@@ -64,13 +64,13 @@ sent. Still, review the result with `git diff`.
 | `-n N`, `--patience N` | round cap (20); rounds without progress before asking you (3) |
 | `--no-sandbox` | let the test command use the network and write outside the project |
 
-Settings can also come from `GEMININONCE_CHROME_PROFILE`, `GEMININONCE_ACCOUNT`, `GEMININONCE_MODEL`
-and `GEMININONCE_PRICE`. See `gemininonce --help` and `gemininonce build --help` for everything.
+Settings can also come from `GEMINONCE_CHROME_PROFILE`, `GEMINONCE_ACCOUNT`, `GEMINONCE_MODEL`
+and `GEMINONCE_PRICE`. See `geminonce --help` and `geminonce build --help` for everything.
 
 ## More
 
 - [How the fix loop works](docs/how-it-works.md): rounds, file requests, retries, partial edits, output, models, cost
-- [`gemininonce build`](docs/build.md): spec, then test plan, then tests, then code, with independent reviews and locked tests
+- [`geminonce build`](docs/build.md): spec, then test plan, then tests, then code, with independent reviews and locked tests
 - [Testing](docs/testing.md): what a good test suite looks like, and how `build` gets there
 - [Example projects](EXAMPLES.md): 10 projects built on public APIs, including library and API migrations, each with commands to run it
 - [Accounts and anonymous mode](docs/accounts.md): Chrome profiles, account checks, the free tier

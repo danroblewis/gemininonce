@@ -1,9 +1,9 @@
 # How the fix loop works
 
 ```sh
-gemininonce src/ tests/ -t "pytest -x"
-gemininonce app.py -t "npm test" -m "the date parser breaks on ISO week dates"
-gemininonce lib/ -m "add a --verbose flag"      # no test: you review and send follow-ups
+geminonce src/ tests/ -t "pytest -x"
+geminonce app.py -t "npm test" -m "the date parser breaks on ISO week dates"
+geminonce lib/ -m "add a --verbose flag"      # no test: you review and send follow-ups
 ```
 
 ## Each round
@@ -15,7 +15,7 @@ gemininonce lib/ -m "add a --verbose flag"      # no test: you review and send f
    `COMMAND:` followed by a code block for each shell command it suggests. If it needs a file it
    doesn't have, or the current version of one it changed earlier, it writes `READ: path`, and the
    file comes back in the next message.
-3. The returned files are written. Before a file is replaced, its original is backed up to `~/.gemininonce/backups/<timestamp>/`.
+3. The returned files are written. Before a file is replaced, its original is backed up to `~/.geminonce/backups/<timestamp>/`.
 4. You're asked to **[a]pprove / [m]odify / [s]kip** each suggested command.
 5. The test runs again. If it fails, the output goes back to the same chat.
 
@@ -66,14 +66,14 @@ Without a terminal (scripts, `until` loops), it stops with exit code 1 instead o
 Because the exit code reports the result, you can wrap it in a shell loop:
 
 ```sh
-until gemininonce example/tests example/todo -t 'cd example && pytest -x'; do :; done
+until geminonce example/tests example/todo -t 'cd example && pytest -x'; do :; done
 ```
 
 When Gemini replies without code (an error like "I encountered an error…", a refusal, or just an
 explanation), it retries up to `--retries` times (default 3), and retries don't count as rounds.
 For an error or a short reply it resends the prompt. For a longer reply it asks for the files. If
 Gemini doesn't reply at all within the time limit, that's retried the same way, and a screenshot
-of the page is saved to `~/.gemininonce/last_error.png`.
+of the page is saved to `~/.geminonce/last_error.png`.
 
 ## Partial edits
 
@@ -105,7 +105,7 @@ Colors turn off automatically when output isn't a terminal, or if you set `NO_CO
 It uses **Flash** by default. Choose a different model with `--model pro`,
 `--model flash-lite`, or any unique part of a name shown in Gemini's model picker (e.g.
 `--model 3.1`). Version numbers are ignored, so `flash` keeps working after an upgrade. Set
-`GEMININONCE_MODEL` to change the default, or use `--model any` to leave the picker alone. The
+`GEMINONCE_MODEL` to change the default, or use `--model any` to leave the picker alone. The
 model is checked before every message and switched back if it changed. If the requested model
 isn't available, it exits and lists the models Gemini offers.
 
@@ -145,4 +145,4 @@ price.
 - **Prices** come from a built-in table taken from
   [Google's pricing page](https://ai.google.dev/gemini-api/docs/pricing) (updated 2026-09-24).
   Flash prices double on 2027-01-01. Override them with `--price IN,OUT` (USD per 1M tokens) or
-  `GEMININONCE_PRICE`.
+  `GEMINONCE_PRICE`.

@@ -9,7 +9,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from . import HOME, chrome_profiles, protocol, safety
+from . import HOME, chrome_profiles, env, protocol, safety
 from .browser import Browser
 from .console import BOLD, DIM, YELLOW, ask_user, paint
 from .gemini import GeminiChat
@@ -18,8 +18,8 @@ from .loop import FixLoop
 from .transcript import Transcript
 from .workspace import Workspace
 
-ENV_VARS = ("GEMININONCE_ACCOUNT", "GEMININONCE_HOME", "GEMININONCE_CHROME_PROFILE", "GEMININONCE_MODEL",
-            "GEMININONCE_PRICE")
+ENV_VARS = ("GEMINONCE_ACCOUNT", "GEMINONCE_HOME", "GEMINONCE_CHROME_PROFILE", "GEMINONCE_MODEL",
+            "GEMINONCE_PRICE")
 
 
 class HelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
@@ -34,16 +34,16 @@ class HelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
 def add_session_options(ap: argparse.ArgumentParser) -> None:
     """Options shared by every command: the loop's limits, and how we reach Gemini."""
     ap.add_argument("-n", "--max-iters", type=int, default=20, help="hard cap on rounds")
-    ap.add_argument("--price", default=os.environ.get("GEMININONCE_PRICE"), metavar="IN,OUT",
+    ap.add_argument("--price", default=env("PRICE"), metavar="IN,OUT",
                     help="API price in USD per 1M input,output tokens for the cost estimate "
                          "(built-in table used if omitted)")
     ap.add_argument("--retries", type=int, default=3, help="re-asks when Gemini replies without code")
     ap.add_argument("--patience", type=int, default=3, help="stop after N rounds with unchanged test output")
     ap.add_argument("--timeout", type=int, default=300, help="timeout for test/commands (seconds)")
     ap.add_argument("--profile", default=str(HOME / "profile"), help="browser profile dir (keeps login)")
-    ap.add_argument("--account", default=os.environ.get("GEMININONCE_ACCOUNT"),
+    ap.add_argument("--account", default=env("ACCOUNT"),
                     help="refuse to send unless the Gemini account contains this, e.g. @corp.com")
-    ap.add_argument("--chrome-profile", default=os.environ.get("GEMININONCE_CHROME_PROFILE"),
+    ap.add_argument("--chrome-profile", default=env("CHROME_PROFILE"),
                     help="use a copy of your own Chrome profile (dir, name or email, e.g. 'Profile 2'); "
                          "'list' shows them")
     ap.add_argument("--no-sandbox", action="store_true",
@@ -51,7 +51,7 @@ def add_session_options(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--network", action=argparse.BooleanOptionalAction, default=None,
                     help="let the sandboxed test command use the internet (default: on for `build`, whose "
                          "e2e tests hit real services; off otherwise)")
-    ap.add_argument("--model", default=os.environ.get("GEMININONCE_MODEL"),
+    ap.add_argument("--model", default=env("MODEL"),
                     help="Gemini model to force: flash, pro, flash-lite, ...; 'any' leaves it alone "
                          "(default: flash, or flash-lite with --anonymous)")
     ap.add_argument("--anonymous", action="store_true",
@@ -64,8 +64,8 @@ def add_session_options(ap: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(prog="gemininonce", description="Fix code with Gemini web in a test loop. "
-                                 "(Also: `gemininonce build IDEA` writes a spec, tests, then the code.)",
+    ap = argparse.ArgumentParser(prog="geminonce", description="Fix code with Gemini web in a test loop. "
+                                 "(Also: `geminonce build IDEA` writes a spec, tests, then the code.)",
                                  formatter_class=HelpFormatter)
     ap.add_argument("paths", nargs="+", help="files and/or directories to send to Gemini")
     ap.add_argument("-t", "--test", help="command that must pass (exit 0), e.g. 'pytest -x'")
@@ -79,8 +79,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def warn_unknown_env_vars() -> None:
     for var in os.environ:
-        if var.startswith("GEMININONCE_") and var not in ENV_VARS:
-            print(f"warning: unknown environment variable {var} (did you mean GEMININONCE_ACCOUNT?)")
+        if var.startswith(("GEMINONCE_", "GEMININONCE_")) and var.replace("GEMININONCE_", "GEMINONCE_") not in ENV_VARS:
+            print(f"warning: unknown environment variable {var} (did you mean GEMINONCE_ACCOUNT?)")
 
 
 def confirm_anonymous(args, files: dict[str, str]) -> bool:
@@ -89,7 +89,7 @@ def confirm_anonymous(args, files: dict[str, str]) -> bool:
                 if any(a == f or a.startswith(f + "=") for a in sys.argv[1:])]
     if explicit:
         sys.exit(f"--anonymous can't be combined with {', '.join(explicit)}")
-    for var in ("GEMININONCE_CHROME_PROFILE", "GEMININONCE_ACCOUNT"):
+    for var in ("GEMINONCE_CHROME_PROFILE", "GEMINONCE_ACCOUNT", "GEMININONCE_CHROME_PROFILE", "GEMININONCE_ACCOUNT"):
         if os.environ.get(var):
             print(paint(f"--anonymous: ignoring {var}", DIM))
     args.chrome_profile = args.account = None
@@ -123,7 +123,7 @@ def open_chat(args, profile_dir: Path) -> GeminiChat:
 
 def profile_dir_for(args) -> Path:
     if args.anonymous:
-        return Path(tempfile.mkdtemp(prefix="gemininonce-anon-"))
+        return Path(tempfile.mkdtemp(prefix="geminonce-anon-"))
     if args.chrome_profile and args.profile == str(HOME / "profile"):
         return HOME / "chrome"
     return Path(args.profile)

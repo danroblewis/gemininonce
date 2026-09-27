@@ -4,7 +4,7 @@
 
 ```sh
 git clone https://github.com/danroblewis/gemininonce
-cd gemininonce && uv venv && uv pip install -e . pytest
+cd geminonce && uv venv && uv pip install -e . pytest
 ```
 
 Use an **editable** install (`-e`). A plain `pip install .` copies the code, so later changes (and branch switches) won't take effect until you reinstall.
@@ -17,7 +17,7 @@ git pull                                                                      # 
 ```
 
 `--reinstall` makes uv fetch the latest commit instead of reusing the copy it already has. With
-uvx, keep `--refresh-package gemininonce` in the command (see below).
+uvx, keep `--refresh-package geminonce` in the command (see below).
 
 ## Running with uvx (no install)
 
@@ -25,17 +25,17 @@ uvx, keep `--refresh-package gemininonce` in the command (see below).
 
 ```sh
 # from a local checkout
-uvx --refresh-package gemininonce --from ~/gemininonce gemininonce src/ tests/ -t "pytest -x"
+uvx --refresh-package geminonce --from ~/geminonce geminonce src/ tests/ -t "pytest -x"
 
 # from GitHub
-uvx --refresh-package gemininonce --from git+https://github.com/danroblewis/gemininonce gemininonce src/ tests/ -t "pytest -x"
+uvx --refresh-package geminonce --from git+https://github.com/danroblewis/gemininonce geminonce src/ tests/ -t "pytest -x"
 
 # with your own Chrome login and a required account
-uvx --refresh-package gemininonce --from ~/gemininonce gemininonce src/ tests/ -t "pytest -x" \
+uvx --refresh-package geminonce --from ~/geminonce geminonce src/ tests/ -t "pytest -x" \
   --chrome-profile Default --account @yourcompany.com
 ```
 
-`--refresh-package gemininonce` makes uv rebuild from the current source. Without it, uv keeps
+`--refresh-package geminonce` makes uv rebuild from the current source. Without it, uv keeps
 running the cached copy and ignores your edits. It re-checks only this package, so it's still fast.
 
 It uses the Google Chrome you already have installed, so there's nothing else to download. Without
@@ -44,12 +44,12 @@ Chrome, run `uvx playwright install chromium` once.
 For a short command, add an alias to `~/.zshrc`:
 
 ```sh
-alias gn='uvx --refresh-package gemininonce --from ~/gemininonce gemininonce'
+alias gn='uvx --refresh-package geminonce --from ~/geminonce geminonce'
 # gn src/ tests/ -t "pytest -x"
 ```
 
 On the first run a Chrome window opens. Log in to Gemini there. The login is saved in
-`~/.gemininonce/profile`.
+`~/.geminonce/profile`.
 
 ## Tests
 
@@ -58,8 +58,8 @@ pytest tests          # offline, a few seconds
 pytest tests --e2e    # also runs the live tests against anonymous Gemini (~1.5 min)
 ```
 
-- **Unit tests** (`test_gemininonce.py`) cover merging, safety checks, parsing, applying edits and the
-  cost estimate. `test_pipeline.py` runs `gemininonce build` against a scripted fake Gemini.
+- **Unit tests** (`test_geminonce.py`) cover merging, safety checks, parsing, applying edits and the
+  cost estimate. `test_pipeline.py` runs `geminonce build` against a scripted fake Gemini.
 - **Recorded-reply tests** (`test_recorded.py`) use real replies saved from an anonymous Gemini
   session in `tests/fixtures/recorded/`. They check that:
   - the page-reading code gets the same blocks from each saved reply's HTML (in a local browser,
@@ -75,7 +75,7 @@ To re-record the fixtures after Gemini's page changes, run `python tests/record_
 uses an anonymous session, keeps the old fixtures unless the recorded session ends with passing
 tests, and refuses to save anything containing your home folder path or username.
 
-The tests use a temporary `GEMININONCE_HOME` and ignore your `GEMININONCE_*` settings.
+The tests use a temporary `GEMINONCE_HOME` and ignore your `GEMINONCE_*` settings.
 
 ## Code layout
 
@@ -92,10 +92,10 @@ The tests use a temporary `GEMININONCE_HOME` and ignore your `GEMININONCE_*` set
 | `safety.py` | Sandbox, risky-code patterns, secret detection |
 | `transcript.py`, `highlight.py`, `console.py` | Console output: transcript, syntax highlighting, colors and prompts |
 | `usage.py` | `Usage`: token counts and the API-equivalent cost estimate |
-| `pipeline.py` | `gemininonce build`: the spec, tests and code stages, reviews and locking |
+| `pipeline.py` | `geminonce build`: the spec, tests and code stages, reviews and locking |
 
 ## When it breaks
 
 Gemini's page structure changes from time to time. The selectors are constants at the top of
-`gemininonce/gemini.py`. The last reply's HTML is saved to `~/.gemininonce/last_response.html`, so
+`geminonce/gemini.py`. The last reply's HTML is saved to `~/.geminonce/last_response.html`, so
 you can see what changed.

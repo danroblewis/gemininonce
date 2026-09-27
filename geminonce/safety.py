@@ -1,4 +1,4 @@
-"""Rough safety rails for gemininonce: none of this is a guarantee, it's defense in depth.
+"""Rough safety rails for geminonce: none of this is a guarantee, it's defense in depth.
 
 1. sandbox_argv(): run the test command with no internet, writes confined to the project + temp dirs,
    and credential stores unreadable (macOS sandbox-exec, Linux bwrap).
@@ -192,7 +192,7 @@ def bandit_new_findings(old: str, new: str) -> list[tuple[str, str, int, str]]:
 
 
 # --- Sandbox for running Gemini-written code ----------------------------------------------------
-SECRET_DIRS = [".ssh", ".aws", ".gnupg", ".config/gcloud", ".kube", ".docker", ".azure", ".gemininonce",
+SECRET_DIRS = [".ssh", ".aws", ".gnupg", ".config/gcloud", ".kube", ".docker", ".azure", ".geminonce", ".gemininonce",
                "Library/Keychains", "Library/Application Support/Google/Chrome", "Library/Cookies",
                ".config/google-chrome", ".mozilla", "Library/Application Support/Firefox"]
 SECRET_FILES = [".netrc", ".npmrc", ".pypirc", ".git-credentials", ".zsh_history", ".bash_history"]

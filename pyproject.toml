@@ -1,16 +1,16 @@
 [project]
-name = "gemininonce"
+name = "geminonce"
 version = "0.1.0"
 description = "Tiny fix-and-test loop driving Gemini web via browser automation"
 requires-python = ">=3.10"
 dependencies = ["playwright>=1.40", "pygments>=2.15"]
 
 [project.scripts]
-gemininonce = "gemininonce.cli:entry"
+geminonce = "geminonce.cli:entry"
 
 [build-system]
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["gemininonce"]
+packages = ["geminonce"]

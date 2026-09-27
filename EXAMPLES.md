@@ -1,11 +1,11 @@
 # Example projects
 
-Projects for trying `gemininonce` on real problems, and for spotting regressions when its prompts or
+Projects for trying `geminonce` on real problems, and for spotting regressions when its prompts or
 checks change. They all depend on **public APIs that need no key**, because external connections
 are the hard part: finding current docs, mocking the APIs in unit tests, calling them for real in
 e2e tests, and handling rate limits, flaky responses and changing formats.
 
-- **1–6: build from an idea** with `gemininonce build`.
+- **1–6: build from an idea** with `geminonce build`.
 - **7–10: migrations.** First build a project pinned to an *old* library or API version, then
   upgrade it and let the fix loop repair what broke. That's the everyday job of fixing API version
   changes and incompatibilities.
@@ -18,10 +18,10 @@ approve at the prompt. Unattended runs (`--accept`, no terminal) skip them, so t
 matter there.
 
 ```sh
-mkdir -p ~/gemininonce-examples && cd ~/gemininonce-examples
+mkdir -p ~/geminonce-examples && cd ~/geminonce-examples
 
 # new <folder> [packages...]: make the folder, a venv in it, and install pytest + the packages
-new() { mkdir -p ~/gemininonce-examples/"$1" && cd ~/gemininonce-examples/"$1" \
+new() { mkdir -p ~/geminonce-examples/"$1" && cd ~/geminonce-examples/"$1" \
   && python3 -m venv .venv && . .venv/bin/activate && pip install -q pytest "${@:2}"; }
 ```
 
@@ -47,7 +47,7 @@ registry**, and report which packages are outdated, yanked or deprecated, with r
 
 ```sh
 new dependency-freshness httpx packaging
-gemininonce build "A Python CLI, depcheck, that reads a requirements.txt or a package.json and, for each \
+geminonce build "A Python CLI, depcheck, that reads a requirements.txt or a package.json and, for each \
 dependency, looks up the latest version on PyPI (https://pypi.org/pypi/<name>/json) or the npm registry \
 (https://registry.npmjs.org/<name>), then prints a table: name, pinned or required version, latest version, \
 latest release date, and a status of up-to-date, outdated, yanked or deprecated. Compare versions with the \
@@ -66,7 +66,7 @@ API versioning (`X-GitHub-Api-Version`).
 
 ```sh
 new github-releases httpx
-gemininonce build "A Python CLI, reldigest, that takes GitHub repos as owner/name and a --since date, fetches \
+geminonce build "A Python CLI, reldigest, that takes GitHub repos as owner/name and a --since date, fetches \
 their releases from the GitHub REST API (GET /repos/{owner}/{repo}/releases, following Link-header \
 pagination, sending the X-GitHub-Api-Version header), keeps releases published on or after the date, and \
 prints a Markdown digest per repo: version, date, and the release-note lines that mention breaking changes \
@@ -84,7 +84,7 @@ remembering which quakes were already seen.
 
 ```sh
 new earthquake-watcher httpx
-gemininonce build "A Python CLI, quakewatch, that polls the USGS earthquake GeoJSON feed \
+geminonce build "A Python CLI, quakewatch, that polls the USGS earthquake GeoJSON feed \
 (https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson) and prints an alert for each \
 earthquake within --radius-km of --lat/--lon with magnitude at least --min-mag: time (UTC and local), \
 magnitude, place, distance in km (haversine), and the USGS event URL. It remembers alerted event ids in a \
@@ -102,7 +102,7 @@ Geocode places with **Open-Meteo's geocoding API**, fetch weather, convert curre
 
 ```sh
 new travel-planner httpx
-gemininonce build "A Python CLI, tripbrief, that takes a list of cities with dates and a home currency, and \
+geminonce build "A Python CLI, tripbrief, that takes a list of cities with dates and a home currency, and \
 for each stop: geocodes the city with the Open-Meteo geocoding API (https://geocoding-api.open-meteo.com/v1/search), \
 fetches the daily forecast (max/min temperature, precipitation) for those dates from the Open-Meteo forecast \
 API in the city's own timezone, and converts a daily budget from the home currency into the local currency \
@@ -122,7 +122,7 @@ fuzzy "closest" logic.
 
 ```sh
 new wayback-tool httpx beautifulsoup4
-gemininonce build "A Python CLI, wayback, with two commands. 'closest URL DATE' finds the Internet Archive \
+geminonce build "A Python CLI, wayback, with two commands. 'closest URL DATE' finds the Internet Archive \
 snapshot closest to DATE using the availability API (https://archive.org/wayback/available) and falls back \
 to the CDX API (https://web.archive.org/cdx/search/cdx) when needed, printing the snapshot URL and \
 timestamp. 'diff URL DATE1 DATE2' fetches the two closest snapshots, extracts their visible text (dropping \
@@ -139,7 +139,7 @@ Search **Open Library** by ISBN or title, show editions, and check reading avail
 
 ```sh
 new open-library httpx
-gemininonce build "A Python CLI, bookfind, that looks up books on Open Library: 'isbn ISBN' uses the ISBN \
+geminonce build "A Python CLI, bookfind, that looks up books on Open Library: 'isbn ISBN' uses the ISBN \
 API (https://openlibrary.org/isbn/<isbn>.json) and 'search TITLE [--author A]' uses the search API \
 (https://openlibrary.org/search.json). For each work it prints title, authors (resolving author keys to \
 names), first publish year, number of editions, and whether it can be borrowed or read online, using the \
@@ -167,14 +167,14 @@ spread across the code.
 
 ```sh
 new pydantic-migration httpx "pydantic>=1.10,<2"
-gemininonce build "A Python library and CLI, ghrepo, that fetches a GitHub repository and its latest \
+geminonce build "A Python library and CLI, ghrepo, that fetches a GitHub repository and its latest \
 releases from the GitHub REST API and parses them into Pydantic v1 models (use Pydantic v1 APIs only: \
 BaseModel with class Config, @validator, parse_obj, .dict(), .json()), then prints a summary. Pin \
 pydantic>=1.10,<2 in requirements.txt." --dir . --anonymous
 
 pip install -U "pydantic>=2"      # break it
 pytest -q                          # see what broke
-gemininonce . -t "pytest -q" --network --anonymous \
+geminonce . -t "pytest -q" --network --anonymous \
   -m "We upgraded to Pydantic v2. Migrate the code to the Pydantic v2 API (no v1 compatibility shims) \
       and update requirements.txt."
 ```
@@ -189,7 +189,7 @@ database behavior.
 
 ```sh
 new sqlalchemy-migration httpx "sqlalchemy>=1.4,<1.5"
-gemininonce build "A Python CLI, pypicache, that fetches package metadata from the PyPI JSON API \
+geminonce build "A Python CLI, pypicache, that fetches package metadata from the PyPI JSON API \
 (https://pypi.org/pypi/<name>/json) and caches it in SQLite with SQLAlchemy 1.4 in the 1.x style: \
 engine.execute() for queries, select([table.c.col, ...]) with a list, Table objects with MetaData, and \
 implicit autocommit. It has commands to fetch, list cached packages, and show a package from cache with a \
@@ -197,7 +197,7 @@ max age. Pin sqlalchemy>=1.4,<1.5 in requirements.txt." --dir . --anonymous
 
 pip install -U "sqlalchemy>=2"    # break it
 pytest -q
-gemininonce . -t "pytest -q" --network --anonymous \
+geminonce . -t "pytest -q" --network --anonymous \
   -m "We upgraded to SQLAlchemy 2.0. Migrate to the 2.0 API (connections and sessions with explicit \
       commits, select() without lists) and update requirements.txt."
 ```
@@ -211,12 +211,12 @@ and retries.
 
 ```sh
 new http-client-swap requests httpx pytest-asyncio
-gemininonce build "A Python library and CLI, hnfront, that fetches the current Hacker News front page from \
+geminonce build "A Python library and CLI, hnfront, that fetches the current Hacker News front page from \
 the official Firebase API (https://hacker-news.firebaseio.com/v0/topstories.json and /v0/item/<id>.json) \
 using the requests library (synchronous), with a timeout and one retry per request, and prints the top N \
 stories with score, comment count and domain." --dir . --anonymous
 
-gemininonce . -t "pytest -q" --network --anonymous \
+geminonce . -t "pytest -q" --network --anonymous \
   -m "Replace requests with httpx and make the library async (httpx.AsyncClient, fetching items \
       concurrently with asyncio.gather, keeping the timeout and retry). The CLI stays synchronous from the \
       user's point of view. Update the tests (pytest-asyncio) and requirements.txt."
@@ -234,11 +234,11 @@ itself (research), and the response shape is completely different.
 
 ```sh
 new pypi-api-change httpx packaging
-gemininonce build "A Python CLI, pkghistory, that lists every released version of a PyPI package with its \
+geminonce build "A Python CLI, pkghistory, that lists every released version of a PyPI package with its \
 upload date and whether it was yanked, oldest first, using the 'releases' field of the PyPI JSON API \
 (https://pypi.org/pypi/<name>/json). Options: --since DATE and --latest N." --dir . --anonymous
 
-gemininonce . -t "pytest -q" --network --anonymous \
+geminonce . -t "pytest -q" --network --anonymous \
   -m "The 'releases' field of PyPI's /pypi/<name>/json API is deprecated. Switch to the PyPI simple JSON \
       API (PEP 691 and PEP 700: https://pypi.org/simple/<name>/ with the Accept header \
       application/vnd.pypi.simple.v1+json), which lists files with upload times and yanked status per file; \

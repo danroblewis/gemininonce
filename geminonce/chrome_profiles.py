@@ -2,7 +2,7 @@
 
 Chrome 136+ refuses automation of its *default* data dir, but a copy elsewhere works, and the
 copied cookies still decrypt (on macOS the key lives in the Keychain, not the profile). So we
-mirror your profile (minus caches) into ~/.gemininonce/chrome and launch that: same SSO sessions.
+mirror your profile (minus caches) into ~/.geminonce/chrome and launch that: same SSO sessions.
 """
 from __future__ import annotations
 

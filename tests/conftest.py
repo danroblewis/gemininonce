@@ -6,12 +6,13 @@ from pathlib import Path
 
 import pytest
 
-# Isolate tests from the user's ~/.gemininonce and shell settings. HOME is read at import time,
-# so this has to happen before anything imports gemininonce.
-_TEST_HOME = tempfile.mkdtemp(prefix="gemininonce-test-home-")
-os.environ["GEMININONCE_HOME"] = _TEST_HOME
-for _var in ("GEMININONCE_ACCOUNT", "GEMININONCE_CHROME_PROFILE", "GEMININONCE_MODEL", "GEMININONCE_PRICE"):
-    os.environ.pop(_var, None)
+# Isolate tests from the user's ~/.geminonce and shell settings. HOME is read at import time,
+# so this has to happen before anything imports geminonce.
+_TEST_HOME = tempfile.mkdtemp(prefix="geminonce-test-home-")
+os.environ["GEMINONCE_HOME"] = _TEST_HOME
+for _var in ("ACCOUNT", "CHROME_PROFILE", "MODEL", "PRICE"):
+    os.environ.pop(f"GEMINONCE_{_var}", None)
+    os.environ.pop(f"GEMININONCE_{_var}", None)  # the old name still works, so clear it too
 
 FIXTURES = Path(__file__).parent / "fixtures"
 collect_ignore = ["fixtures"]  # the todo app's own tests fail on purpose

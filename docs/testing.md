@@ -1,6 +1,6 @@
-# Testing in `gemininonce build`
+# Testing in `geminonce build`
 
-`gemininonce build` aims for a large test suite in two parts: **unit tests** with every external
+`geminonce build` aims for a large test suite in two parts: **unit tests** with every external
 connection mocked, and **end-to-end tests** that use no mocks and hit the real services. It gets
 there in steps, each one checked:
 
@@ -85,4 +85,4 @@ Anything deliberately left out, and why.
 ```
 
 To change what counts as a good test suite, edit `TESTING_GUIDE` and `TEST_PLAN_TEMPLATE` in
-`gemininonce/protocol.py`.
+`geminonce/protocol.py`.
