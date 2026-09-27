@@ -126,12 +126,30 @@ def spec_problems(text: str) -> list[str]:
     interface = section("Interface")
     if interface is None:
         problems.append("It needs an Interface section giving the complete public API.")
-    elif not re.search(r"```[^\n]*\n.*?\(.*?```", interface, re.S):
+    elif not (re.search(r"```[^\n]*\n.*?\(.*?```", interface, re.S)  # a code block with signatures
+              or len(re.findall(r"`[^`\n]*\w\([^`\n]*\)[^`\n]*`", interface)) >= 2):  # or inline ones
         problems.append("The Interface section must spell out the API as code: every module, class (constructor, "
                         "attributes, methods), function and exception, with full signatures and types.")
-    if section("Architecture") is None:
+    architecture = section("Architecture")
+    if architecture is None:
         problems.append("It needs an Architecture section: components, responsibilities and the file/module layout.")
+    elif interface is not None:
+        uncovered = [f for f in source_files(architecture) if Path(f).stem not in interface]
+        if uncovered:
+            problems.append("The Interface section doesn't cover these files from the Architecture layout: "
+                            + ", ".join(uncovered) + ". Give each one's public API (functions, classes, components "
+                            "with props, endpoints) as signatures.")
     return problems
+
+
+SOURCE_EXT = r"py|pyi|ts|tsx|js|jsx|mjs|go|rs|java|kt|rb|php|cs|swift|c|cc|cpp|h|hpp"
+
+
+def source_files(text: str) -> list[str]:
+    """Source files named in a layout, minus boilerplate (__init__.py, config files, tests) that has no API."""
+    names = re.findall(rf"[\w./-]*?(\w[\w.-]*\.(?:{SOURCE_EXT}))\b", text)
+    skip = re.compile(r"^(__init__|__main__|conftest|setup|main|index)\.|\.config\.|^test_|_test\.|\.test\.|\.spec\.")
+    return list(dict.fromkeys(n for n in names if not skip.search(n)))
 
 
 @dataclass
@@ -231,6 +249,9 @@ class Build:
                     print(paint(f"  {stage.kind} accepted (--accept)", DIM))
                     return written
                 if attempts >= self.args.patience:
+                    if document and written:  # a format quibble shouldn't sink the build; later stages cope
+                        print(paint(f"  Accepting the {stage.kind} despite the problems above (--accept)", YELLOW))
+                        return written
                     sys.exit(f"The {stage.kind} still had problems after {attempts} tries; stopping.")
                 attempts += 1
                 prompt = protocol.discussion_prompt(stage.kind, written, "Don't ask questions: make reasonable "
@@ -346,7 +367,12 @@ class Build:
                 return answer
             if written and not problems:
                 return None
-            print(paint(f"  There's no finished {what} yet; tell Gemini what you want.", YELLOW))
+            if not written:
+                print(paint(f"  There's no {what} yet; tell Gemini what you want.", YELLOW))
+                continue
+            print(paint("  The automatic checks still flag:\n    " + "\n    ".join(problems), YELLOW))
+            if ask_user(paint(f"  Accept the {what} anyway? [y/N] ", YELLOW)).strip().lower() == "y":
+                return None
 
     def print_file(self, rel: str) -> None:
         text = self.read(rel)

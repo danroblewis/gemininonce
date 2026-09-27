@@ -131,8 +131,10 @@ them. Include the file/module layout as a tree, with one line per file saying wh
 The complete public API, as code in the project's language, with full signatures and type hints:
 every module; every class with its constructor arguments, public attributes and methods; every
 function; every custom exception class and what raises it; constants; the CLI (commands, arguments,
-exit codes, output format) if there is one. Give each item a one-line description. Anything a
-test might call or check must be here, spelled exactly as it will be implemented.
+exit codes, output format) if there is one. For a web app, also every HTTP endpoint (method, path,
+request and response JSON, status codes) and every UI component (props, state, user interactions and
+what they do). Cover every source file in the Architecture layout. Give each item a one-line
+description. Anything a test might call or check must be here, spelled exactly as it will be implemented.
 
 ## 5. Data model
 Inputs, outputs, file formats and data structures, with their types and invariants.

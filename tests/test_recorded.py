@@ -384,3 +384,13 @@ def test_blocked_message_box_is_reported_not_crashed(page, monkeypatch, tmp_path
     assert "Couldn't type into Gemini's message box" in str(e.value)
     assert "reached your limit" in str(e.value)
     assert (tmp_path / "last_error.png").exists() and (tmp_path / "last_error.html").exists()
+
+
+def test_links_through_google_search_and_self_links_are_cleaned(page):
+    page.set_content("""<message-content><div class="markdown"><ul>
+        <li>HN API: <a href="https://www.google.com/search?q=https://github.com/hacker-news/api">https://github.com/hacker-news/api</a></li>
+        <li><code>BASE = "[https://hacker-news.firebaseio.com/v0](https://hacker-news.firebaseio.com/v0)"</code></li>
+        </ul></div></message-content>""")
+    md = page.locator("message-content").first.evaluate(EXTRACT_MD_JS)
+    assert md == ("- HN API: <https://github.com/hacker-news/api>\n"
+                  "- `BASE = \"https://hacker-news.firebaseio.com/v0\"`\n")

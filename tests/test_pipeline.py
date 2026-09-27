@@ -148,7 +148,7 @@ def test_user_settles_the_spec_by_talking_to_gemini(build, tmp_path, monkeypatch
     answers = iter(["", "integers only", "please also support floats", "/show", ""])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
     _, printed = run_quiet(b.write_spec)
-    assert "Before I write it" in printed and "no finished specification yet" in printed  # Enter before a spec exists
+    assert "Before I write it" in printed and "no specification yet" in printed  # Enter before a spec exists
     assert chat.sent[1].startswith("The user says:\nintegers only")
     assert chat.sent[2].startswith("The user says:\nplease also support floats")
     assert "changes to SPEC.md" in printed and "+- R2: add(a, b) accepts floats" in printed
@@ -289,3 +289,45 @@ def test_sources_line_names_the_sites():
             "https://github.com/x", "https://en.wikipedia.org/w", "https://stackoverflow.com/q"]
     assert sources_line(urls) == ("sources: 6 (docs.python.org, pypi.org, github.com, en.wikipedia.org, "
                                   "+1 more)")
+
+
+def test_inline_signatures_count_as_an_interface():
+    from gemininonce.pipeline import spec_problems
+    spec = ("# Spec\n\n## 3. Architecture\napp/\n\n## 4. Interface\n\n### `app/hn.py`\n\n"
+            "- `class HNAPIError(Exception)`: raised on bad responses.\n"
+            "- `async def fetch_top_story_ids(client: httpx.AsyncClient, limit: int = 10) -> list[int]`: top ids.\n"
+            "\n## 6. Requirements\n- R1: works\n")
+    assert spec_problems(spec) == []
+
+
+THIN = "# Spec\n\n## 4. Interface\n- add.py has an add function\n\n## 6. Requirements\n- R1: adds\n"
+
+
+def test_user_can_accept_a_spec_the_checks_still_flag(build, tmp_path, monkeypatch):
+    """Gemini won't satisfy a check, and the user is fine with it: they get the final say."""
+    b, chat, _ = build([THIN, THIN], "--patience", "1")
+    b.args.accept = False
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    answers = iter(["", "y"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    _, printed = run_quiet(b.write_spec)
+    assert "The automatic checks still flag" in printed and "Architecture section" in printed
+    assert (tmp_path / "SPEC.md").read_text() == THIN
+
+
+def test_accept_mode_takes_a_flagged_spec_with_a_warning(build, tmp_path):
+    b, chat, _ = build([THIN, THIN, THIN], "--patience", "1")
+    _, printed = run_quiet(b.write_spec)
+    assert "Accepting the specification despite the problems above" in printed
+    assert (tmp_path / "SPEC.md").read_text() == THIN
+
+
+def test_interface_must_cover_the_source_files_in_the_architecture():
+    from gemininonce.pipeline import source_files, spec_problems
+    spec = ("# Spec\n\n## 3. Architecture\n```\napp/\n├── __init__.py\n├── hn.py\nfrontend/src/\n├── main.tsx\n"
+            "├── App.tsx\n└── components/StoryCard.tsx\nvite.config.ts\n```\n\n## 4. Interface\n\n"
+            "- `def fetch_ids(limit: int) -> list[int]` (hn.py)\n- `App()` (App.tsx): the page\n\n"
+            "## 6. Requirements\n- R1: works\n")
+    assert source_files(spec) == ["hn.py", "App.tsx", "StoryCard.tsx"]  # no __init__, main, or config files
+    (problem,) = spec_problems(spec)
+    assert "doesn't cover these files" in problem and "StoryCard.tsx" in problem and "App.tsx" not in problem

@@ -93,7 +93,12 @@ EXTRACT_MD_JS = """
     }
     return inline(n);
   };
-  const cleanUrl = h => h.replace(/[?&]utm_source=gemini$/, '').replace(/([?&])utm_source=gemini&/, '$1');
+  const cleanUrl = h => {
+    // Gemini sometimes links a source through a Google search for it: use the real address.
+    const m = h.match(/^https?:\\/\\/(www\\.)?google\\.com\\/search\\?q=(https?[^&]+)/);
+    if (m) h = decodeURIComponent(m[2]);
+    return h.replace(/[?&]utm_source=gemini$/, '').replace(/([?&])utm_source=gemini&/, '$1');
+  };
   const inline = el => Array.from(el.childNodes).map(inlineNode).join('');
   const fenced = el => {
     const code = el.querySelector('code') || el.querySelector('pre') || el;
@@ -151,7 +156,8 @@ EXTRACT_MD_JS = """
   };
   const out = [];
   walk(root, out);
-  return out.join('\\n\\n') + '\\n';
+  // "[https://x](https://x)" (a link to itself, even inside inline code) reads better as just the address.
+  return out.join('\\n\\n').replace(/\\[(https?:[^\\]\\s]+)\\]\\(\\1\\)/g, '$1') + '\\n';
 }
 """
 
