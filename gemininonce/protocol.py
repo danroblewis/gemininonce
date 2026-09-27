@@ -114,44 +114,116 @@ def failure_prompt(test_cmd: str, code: int, out: str, notes, results, stalled: 
 
 
 # --- build pipeline: spec -> tests -> code ----------------------------------------------------
+SPEC_TEMPLATE = """\
+# <Name>: Specification
+
+## 1. Goal
+What this is for and who uses it, in two or three sentences.
+
+## 2. Scope
+In scope: bullet list. Out of scope: bullet list (things someone might expect but that won't be built).
+
+## 3. Architecture
+The components and what each one is responsible for, how they interact, and the data flow between
+them. Include the file/module layout as a tree, with one line per file saying what it contains.
+
+## 4. Interface
+The complete public API, as code in the project's language, with full signatures and type hints:
+every module; every class with its constructor arguments, public attributes and methods; every
+function; every custom exception class and what raises it; constants; the CLI (commands, arguments,
+exit codes, output format) if there is one. Give each item a one-line description. Anything a
+test might call or check must be here, spelled exactly as it will be implemented.
+
+## 5. Data model
+Inputs, outputs, file formats and data structures, with their types and invariants.
+
+## 6. Requirements
+Numbered R1, R2, ... Each one: a single testable behavior, then "Acceptance:" with concrete,
+checkable criteria (given / when / then, or exact inputs and expected results).
+
+## 7. Examples
+Worked examples written as calls with their exact results (for instance `>>> f(x)` followed by the
+output), including a realistic end-to-end use.
+
+## 8. Errors and edge cases
+Every invalid input or unusual situation and exactly what happens (which exception, message, or
+return value).
+
+## 9. Non-functional requirements
+Only measurable ones (e.g. "solves n=8 in under 1 second", "deterministic output order").
+
+## 10. Assumptions and open questions
+Decisions you made that the user didn't specify, so they can confirm or change them.
+"""
+
+
 def _context(files: dict[str, str], layout: str) -> list[str]:
     return [layout, "EXISTING FILES:\n\n" + "\n\n".join(f"FILE: {rel}\n{fenced(t)}" for rel, t in files.items())
             if files else ""]
 
 
-def spec_prompt(idea: str, spec_path: str, test_cmd: str, files: dict[str, str], layout: str) -> str:
+def spec_prompt(idea: str, spec_path: str, test_cmd: str, files: dict[str, str], layout: str,
+                may_ask: bool = True) -> str:
     return "\n\n".join(filter(None, [
-        "You are writing a SPECIFICATION, not code. It will be reviewed by the user, then turned into "
-        "tests, then into an implementation, by separate steps that only see what you write here.",
+        "You are a software architect writing a SPECIFICATION (not code) together with the user.",
         f"IDEA: {idea}",
-        f"Write it as Markdown to `FILE: {spec_path}`. Keep it concise, with these sections:\n"
-        "- Goal: one to three sentences.\n"
-        "- Requirements: a numbered list of concrete, testable behaviors (R1, R2, ...). Each one should "
-        "become at least one test.\n"
-        "- Interface: the exact public names: files/modules, functions and classes with signatures, "
-        "CLI commands and arguments, return values, exceptions raised.\n"
-        "- Examples: concrete input -> output pairs.\n"
-        "- Edge cases and errors.\n"
-        "- Out of scope.",
-        f"Tests will be run exactly as `{test_cmd}` from the project root, so name modules so the tests "
-        "can import them when run that way.",
+        "Why the spec matters: the next step is a separate test writer that sees ONLY this spec. It has no "
+        "other context and makes no design decisions. It must be able to write complete tests without "
+        "guessing a single module name, class, method, signature, argument order, return type, data format "
+        "or exception. After that, an implementer writes code to pass those tests. So the spec has to "
+        "contain the whole design: architecture, interfaces and behavior. A thin spec produces thin tests "
+        "and the wrong program.",
+        f"Write it as Markdown to `FILE: {spec_path}`, following this template. Keep every section, and "
+        f"be concrete and complete rather than brief:\n{fenced(SPEC_TEMPLATE, 'markdown')}",
+        f"Tests will be run exactly as `{test_cmd}` from the project root, so choose module names and a "
+        "layout the tests can import when run that way.",
+        ("If the idea leaves decisions open that would change the design, you may first ask the user up to 5 "
+         "short numbered questions, in a reply with no FILE: block. Otherwise write the spec, and list what "
+         "you decided in section 10." if may_ask else
+         "Don't ask questions: make reasonable decisions and list them in section 10."),
         *_context(files, layout),
         RULES,
     ]))
+
+
+def spec_self_review_prompt(spec_path: str) -> str:
+    """Have the spec writer read its own spec the way the test writer will."""
+    return "\n\n".join([
+        f"Now review {spec_path} as the test writer will: someone who sees ONLY this file and must write "
+        "complete tests from it. First list, briefly, everything they'd have to guess or that's ambiguous: "
+        "missing or vague names, signatures, argument order, types, return values, data formats, error "
+        "behavior, ordering, and requirements without checkable acceptance criteria. Also list anything "
+        "that contradicts itself.",
+        f"Then send the complete revised {spec_path} that resolves every point (record the decisions you "
+        "made in section 10).",
+        RULES,
+    ])
+
+
+def discussion_prompt(what: str, paths: list[str], user_text: str) -> str:
+    """The user's reply while reviewing a stage's files (spec or tests)."""
+    files = ", ".join(paths) or f"the {what}"
+    return "\n\n".join([
+        f"The user says:\n{user_text}",
+        f"Answer any questions briefly and ask your own if something is still unclear. If this changes the "
+        f"{what}, send the complete updated {files} with FILE: blocks (the whole file, not just the changes).",
+        RULES,
+    ])
 
 
 def tests_prompt(spec: str, spec_path: str, test_cmd: str, tests_dir: str, files: dict[str, str],
                  layout: str) -> str:
     return "\n\n".join(filter(None, [
         "You are writing TESTS for code that does not exist yet (test-first). The specification below "
-        "was agreed with the user.",
+        "was agreed with the user and is the only source of truth.",
         f"- Tests run exactly as `{test_cmd}` from the project root. Put every test file under `{tests_dir}/`.\n"
-        "- Cover every numbered requirement and every example; one focused test per behavior, named "
-        "after it (e.g. test_r3_rejects_empty_input).\n"
-        "- Import the code exactly as named in the spec's Interface section.\n"
+        "- Use the names, signatures, types and exceptions exactly as the spec's Interface section gives them.\n"
+        "- Cover every numbered requirement's acceptance criteria, every example, every error and edge case, "
+        "and any measurable non-functional requirement. Write one focused test per behavior, named after it "
+        "(e.g. test_r3_rejects_empty_input).\n"
         "- Do NOT write the implementation, stubs, or mocks of the code under test: these tests must "
         "fail until the implementation exists.",
-        f"{spec_path}:\n{fenced(spec)}",
+        f"{spec_path}:\n{fenced(spec, 'markdown')}",
         *_context(files, layout),
         RULES,
     ]))
@@ -167,9 +239,13 @@ def tests_problems_prompt(problems: list[str], notes, test_out: str) -> str:
     ]))
 
 
-def revise_prompt(what: str, feedback: str) -> str:
-    return "\n\n".join([f"The user reviewed the {what} and asks for these changes:\n{feedback}",
-                        "Send the complete updated file(s).", RULES])
+def spec_problems_prompt(problems: list[str], notes, spec_path: str) -> str:
+    return "\n\n".join(filter(None, [
+        f"{spec_path} isn't complete yet:\n" + "\n".join(f"- {p}" for p in problems),
+        *notes,
+        f"Send the complete updated {spec_path}.",
+        RULES,
+    ]))
 
 
 def implement_message(spec_path: str, tests_dir: str, test_cmd: str) -> str:

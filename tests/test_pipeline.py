@@ -12,7 +12,9 @@ from gemininonce.transcript import Transcript
 from gemininonce.usage import Usage
 from gemininonce.workspace import Workspace
 
-SPEC = "# Spec\n\n## Requirements\n- R1: add(a, b) returns a + b\n\n## Interface\n- add.py: add(a, b)\n"
+SPEC = ("# Spec\n\n## 3. Architecture\nOne module, add.py.\n\n## 4. Interface\n```python\n"
+        "def add(a: int, b: int) -> int: ...\n```\n\n## 6. Requirements\n- R1: add(a, b) returns a + b. "
+        "Acceptance: add(2, 3) == 5\n")
 TESTS = "from add import add\n\n\ndef test_r1_adds():\n    assert add(2, 3) == 5\n"
 VACUOUS = "def test_nothing():\n    assert True\n"
 CODE = "def add(a, b):\n    return a + b\n"
@@ -40,6 +42,15 @@ class ScriptedChat:
     def new_chat(self):
         self.new_chats += 1
 
+    def select_model(self, name):
+        if name == "pro" and getattr(self, "signed_out", False):
+            raise SystemExit("Model '3.1 Pro' isn't available here (signed out: only 3.5 Flash-Lite).")
+        self.models = getattr(self, "models", []) + [name]
+        self.model = name
+
+    def current_model(self):
+        return self.model
+
 
 @pytest.fixture
 def build(tmp_path, monkeypatch):
@@ -48,7 +59,8 @@ def build(tmp_path, monkeypatch):
 
     def make(replies, *extra):
         args = build_parser().parse_args(["add numbers", "--dir", str(tmp_path), "--accept",
-                                          "-t", f"{sys.executable} -m pytest -q -p no:cacheprovider", *extra])
+                                          "-t", f"{sys.executable} -m pytest -q -p no:cacheprovider",
+                                          *(extra or ("--spec-reviews", "0"))])
         ws = Workspace(tmp_path.resolve(), tmp_path / ".bak", sandbox=False, allow_new_files=True,
                        highlighter=Highlighter())
         chat = ScriptedChat(replies)
@@ -88,15 +100,54 @@ def test_tests_that_pass_without_code_are_sent_back(build, tmp_path):
     assert (tmp_path / "tests/test_add.py").read_text() == TESTS
 
 
-def test_spec_without_numbered_requirements_is_sent_back(build, tmp_path):
-    b, chat, _ = build([reply(("SPEC.md", "# Spec\n\nIt adds numbers.\n")), reply(("SPEC.md", SPEC))])
+def test_thin_spec_is_sent_back_before_the_user_sees_it(build, tmp_path):
+    thin = "# Spec\n\n## Interface\n- add.py: add(a, b)\n\nIt adds numbers.\n"
+    b, chat, _ = build([reply(("SPEC.md", thin)), reply(("SPEC.md", SPEC))])
     run_quiet(b.write_spec)
-    assert "numbered list of testable requirements" in chat.sent[1]
+    assert "numbered, testable requirements" in chat.sent[1]
+    assert "Interface section must spell out the API as code" in chat.sent[1]
+    assert "Architecture section" in chat.sent[1]
     assert (tmp_path / "SPEC.md").read_text() == SPEC
 
 
-def test_review_needs_a_terminal_unless_accepted(build, tmp_path):
+def test_discussion_needs_a_terminal_unless_accepted(build, tmp_path):
     b, _, _ = build([reply(("SPEC.md", SPEC))])
     b.args.accept = False
     with pytest.raises(SystemExit, match="needs a terminal"):
         run_quiet(b.write_spec)
+
+
+def test_user_settles_the_spec_by_talking_to_gemini(build, tmp_path, monkeypatch):
+    """Gemini asks first, the user answers, asks for a change, looks at it, and accepts: all in one
+    conversation, with the change shown as a diff."""
+    questions = [{"kind": "text", "text": "Before I write it:\n1. Integers only, or floats too?"}]
+    updated = SPEC.replace("- R1:", "- R2: add(a, b) accepts floats. Acceptance: add(0.5, 0.25) == 0.75\n- R1:")
+    b, chat, _ = build([questions, reply(("SPEC.md", SPEC)), reply(("SPEC.md", updated))])
+    b.args.accept = False
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    answers = iter(["", "integers only", "please also support floats", "/show", ""])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    _, printed = run_quiet(b.write_spec)
+    assert "Before I write it" in printed and "no finished spec yet" in printed  # Enter before a spec exists
+    assert chat.sent[1].startswith("The user says:\nintegers only")
+    assert chat.sent[2].startswith("The user says:\nplease also support floats")
+    assert "changes to SPEC.md" in printed and "+- R2: add(a, b) accepts floats" in printed
+    assert printed.count("── SPEC.md") == 2  # shown in full once, then again only on /show
+    assert (tmp_path / "SPEC.md").read_text() == updated and len(chat.sent) == 3
+
+
+def test_spec_uses_pro_and_is_self_reviewed_then_stages_switch_back(build, tmp_path):
+    thinner = SPEC.replace("Acceptance: add(2, 3) == 5", "")
+    b, chat, _ = build([reply(("SPEC.md", thinner)), reply(("SPEC.md", SPEC)),
+                        reply(("tests/test_add.py", TESTS)), reply(("add.py", CODE))], "--spec-reviews", "1")
+    passed, printed = run_quiet(b.run)
+    assert passed and chat.models == ["pro", "flash", "flash"]  # spec on Pro; tests and code on the default
+    assert "as the test writer will" in chat.sent[1] and "re-read SPEC.md" in printed
+    assert (tmp_path / "SPEC.md").read_text() == SPEC  # the self-reviewed version is what the user sees
+
+
+def test_signed_out_keeps_flash_lite_and_explains(build, tmp_path):
+    b, chat, _ = build([reply(("SPEC.md", SPEC))], "--anonymous", "--spec-reviews", "0")
+    chat.signed_out = True
+    _, printed = run_quiet(b.write_spec)
+    assert "only Flash-Lite is available" in printed and not getattr(chat, "models", [])

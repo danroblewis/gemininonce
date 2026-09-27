@@ -149,18 +149,35 @@ gemininonce build "A module roman.py with to_roman(n) and from_roman(s) for 1..3
 It works in three stages. Each one gets its own fresh Gemini conversation, and each is only allowed
 to write its own files:
 
-1. **Spec.** Gemini writes `SPEC.md`: goal, numbered testable requirements (R1, R2, …), the exact
-   interface, examples, edge cases, and what's out of scope. It's sent back if the numbered
-   requirements are missing.
+1. **Spec.** Gemini writes `SPEC.md` from a template: goal, scope, architecture and module layout,
+   the **complete interface as code signatures** (classes with constructors, attributes and
+   methods, functions, exceptions), data model, numbered requirements with acceptance criteria,
+   examples, errors, measurable non-functional requirements, and its assumptions. It's told that
+   the test writer will see *only* this file, so nothing may be left to guess.
+   - **Automatic checks:** a spec without numbered requirements, an Interface section written as
+     code, or an Architecture section goes straight back to Gemini.
+   - **Self-review:** Gemini then re-reads its spec as the test writer would, lists everything it
+     would have to guess, and revises it before you see it. `--spec-reviews N` sets how many times
+     (default 1, 0 to skip).
+   - **Model:** signed in, the spec is written with **Pro**, and later stages switch back. Signed
+     out (`--anonymous`), Gemini only offers Flash-Lite, so sign in for better specs. Choose
+     explicitly with `--spec-model` and `--tests-model`.
 2. **Tests.** From the spec, Gemini writes tests under `tests/`. They must compile, and they must
    **fail**: tests that pass before any code exists don't test anything, so they're sent back.
 3. **Code.** The normal fix loop runs until the tests pass. `SPEC.md` and `tests/` are **locked**:
    Gemini can't make the tests pass by changing them. An attempt is rejected, and Gemini is told to
    change the implementation instead.
 
-After stages 1 and 2 you review the result. Press Enter to accept, `e` to edit it yourself in
-`$EDITOR`, or type what Gemini should change. `--accept` skips the reviews, and it's required
-without a terminal.
+**You settle the spec and tests by talking to Gemini.** You see the file in full, and after that
+only a diff of what changed. Then you type your reply, and it goes to the same Gemini conversation.
+You can answer its questions (it may ask some before writing anything), ask your own, or ask for
+changes. Repeat until you're happy:
+- Enter accepts.
+- `/show` prints the whole file again.
+- `/quit` stops.
+
+`--accept` takes Gemini's version without discussion. It's required without a terminal, and then
+Gemini is told to decide open questions itself rather than ask.
 
 Other options:
 - `-t` sets the test command (default `pytest -q`), run from `--dir`. Every stage is told exactly how

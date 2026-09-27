@@ -15,11 +15,13 @@ LAYOUT_SECTION = re.compile(r"^PROJECT LAYOUT[^\n]*\n((?:[ *] [^\n]*(?:\n|\Z))+)
 
 
 class Transcript:
-    """verbose prints code and outputs in full instead of shortening them."""
+    """verbose prints code and outputs in full instead of shortening them. preview: how many lines of a
+    long code block to show (0 = just a one-line summary, for files that get shown in full elsewhere)."""
 
-    def __init__(self, verbose: bool = False, highlighter: Highlighter | None = None):
+    def __init__(self, verbose: bool = False, highlighter: Highlighter | None = None, preview: int = 12):
         self.verbose = verbose
         self.hl = highlighter or Highlighter()
+        self.preview = preview
 
     def outgoing(self, msg: str) -> None:
         """Print our message: rules dropped, attached files listed by name, long outputs shortened."""
@@ -66,9 +68,12 @@ class Transcript:
         lexer = self.hl.shell_lexer() if kind == "COMMAND" else \
             self.hl.lexer_for(code, path if kind == "FILE" else None, block.get("lang"))
         lines = code.splitlines()
-        more = len(lines) - 12 if not self.verbose and len(lines) > 20 else 0
+        if self.preview == 0 and not self.verbose and kind == "FILE":
+            print(paint(f"  │ ({len(lines)} lines)", DIM))
+            return
+        more = len(lines) - self.preview if not self.verbose and len(lines) > self.preview + 8 else 0
         if more:
-            lines = lines[:12]
+            lines = lines[:self.preview]
         print("\n".join(paint("  │ ", DIM) + ln for ln in self.hl.code("\n".join(lines), lexer).splitlines()))
         if more:
             print(paint(f"  │ ... {more} more lines (-v shows all)", DIM))
