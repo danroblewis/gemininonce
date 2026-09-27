@@ -11,6 +11,7 @@ there in steps, each one checked:
    guide. Finally you discuss it with Gemini until you accept it.
 2. **Tests.** A test writer implements every case in the plan, in `tests/unit/` and `tests/e2e/`.
    The tests are sent back automatically if:
+   - an e2e test mocks anything, or the unit tests use `patch(...)` without any `autospec`/`spec`
    - they don't compile
    - either folder is empty
    - a requirement isn't named in any test (`test_r3_…`)
@@ -47,11 +48,16 @@ WHAT A GOOD TEST SUITE LOOKS LIKE
 TWO KINDS OF TESTS, IN TWO FOLDERS
 - tests/unit/: fast, isolated tests of each component. Mock every external connection (network/HTTP,
   databases, other services, subprocesses, the clock) at the boundary. Test how the code talks to them (called
-  with the right arguments) and how it handles their failures (errors, timeouts, bad data).
+  with the right arguments) and how it handles their failures (errors, timeouts, bad data). Mock with
+  autospec (patch(..., autospec=True), create_autospec, or spec=), so a mock of a function, method or
+  attribute that doesn't really exist fails instead of silently passing.
 - tests/e2e/: the whole system through its real entry points (public API, CLI) with NO mocks. If it
-  uses real services or the network, call them for real: network access is available. Check observable
-  outcomes; where real data varies, check its shape and invariants rather than exact values. Skip only when a
-  required credential is truly missing, and say why.
+  uses real services or the network, call them for real: network access is available. Each e2e test must
+  PROVE its real integration works: assert on the real results (data came back, the fields that matter are
+  filled in, files were actually produced), never just that nothing crashed. A test that passes when every
+  external call fails proves nothing; graceful failure belongs in the mocked unit tests. Where real data
+  varies, check its shape and invariants rather than exact values. Skip only when a required credential is
+  truly missing, and say why.
 ```
 
 ## The test plan template

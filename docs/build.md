@@ -1,11 +1,11 @@
-# `gemininonce build`: spec → test plan → tests → code
+# `gemininonce build`: spec → test plan → tests → code → README
 
 ```sh
 gemininonce build "A module roman.py with to_roman(n) and from_roman(s) for 1..3999, \
   raising ValueError on bad input" --dir roman
 ```
 
-It works in four stages. Each one gets its own fresh Gemini conversation, and each is only allowed
+It works in five stages. Each one gets its own fresh Gemini conversation, and each is only allowed
 to write its own files:
 
 1. **Spec.** Gemini writes `SPEC.md` from a template: goal, scope, architecture and module layout,
@@ -45,6 +45,12 @@ to write its own files:
 4. **Code.** The normal fix loop runs until the tests pass. `SPEC.md` and `tests/` are **locked**:
    Gemini can't make the tests pass by changing them. An attempt is rejected, and Gemini is told to
    change the implementation instead.
+5. **README.** Once the tests pass, Gemini writes `README.md` from the actual code: what the project
+   is, how to install it (including extra steps like `playwright install chromium`), configure it,
+   run it, use it (commands, endpoints, what to click), and run its tests. It's sent back if the
+   install, run or usage section is missing, or if there are no commands. The build then **prints
+   the install and run instructions** as its last output. `--no-readme` skips this stage, and
+   `--from readme` writes just the README for an existing project.
 
 **You settle the spec, the plan and the tests by talking to Gemini.** You see the file in full, and after that
 only a diff of what changed. Then you type your reply, and it goes to the same Gemini conversation.

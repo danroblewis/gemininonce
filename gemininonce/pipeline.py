@@ -27,7 +27,7 @@ from .loop import FixLoop
 from .transcript import Transcript, sources_line
 from .workspace import Workspace
 
-STAGES = ("spec", "plan", "tests", "code")
+STAGES = ("spec", "plan", "tests", "code", "readme")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -57,6 +57,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--tests-reviews", type=int, default=1,
                     help="independent reviews of the tests: a fresh session compares them with the spec "
                          "(coverage, exact interface, correct expectations, no over-specifying)")
+    ap.add_argument("--no-readme", dest="readme", action="store_false",
+                    help="don't write a README.md (install, run, usage) once the tests pass")
     ap.add_argument("--no-research", dest="research", action="store_false",
                     help="don't ask the spec writer and planner to research the web first")
     ap.add_argument("--accept", action="store_true",
@@ -104,6 +106,18 @@ def plan_problems(plan: str, spec: str, per_requirement: int) -> list[str]:
     if reqs and len(cases) < per_requirement * len(reqs):
         problems.append(f"Only {len(cases)} named test cases for {len(reqs)} requirements; plan at least "
                         f"{per_requirement} per requirement (normal case, boundaries, errors, examples), named test_...")
+    return problems
+
+
+def readme_problems(text: str) -> list[str]:
+    """What a README is missing for someone to install, run and use the project."""
+    titles = " ".join(title.lower() for _, _, title in protocol.headings(text.splitlines()))
+    problems = [f"It needs a section on how to {what}." for what, words in
+                (("install it", ("install", "setup", "set up")), ("run it", ("run", "start", "launch")),
+                 ("use it", ("usage", "use", "using", "example")))
+                if not any(w in titles for w in words)]
+    if "```" not in text:
+        problems.append("Give the install and run steps as exact commands in code blocks.")
     return problems
 
 
@@ -178,6 +192,7 @@ class Build:
             "spec": Stage("spec", "specification", self.spec, args.spec_reviews),
             "plan": Stage("plan", "test plan", self.plan, args.plan_reviews),
             "tests": Stage("tests", "tests", None, args.tests_reviews),
+            "readme": Stage("readme", "README", "README.md", 0),
         }
 
     def read(self, rel: str) -> str:
@@ -209,7 +224,8 @@ class Build:
                 continue
             if stage.path and not edits:  # the document is the reply itself (a FILE: block can't hold its code blocks)
                 markdown = getattr(self.chat, "last_markdown", "") or protocol.blocks_markdown(blocks)
-                finder = protocol.spec_document if stage.name == "spec" else protocol.plan_document
+                finder = {"spec": protocol.spec_document, "plan": protocol.plan_document,
+                          "readme": protocol.readme_document}[stage.name]
                 if (doc := finder(markdown)):
                     edits = [(stage.path, doc)]
                 elif self.quiet_transcript.truncated:  # a long message for the user, not the document: show it all
@@ -271,6 +287,8 @@ class Build:
             return spec_problems(self.read(self.spec))
         if stage.name == "plan":
             return plan_problems(self.read(self.plan), self.read(self.spec), self.args.tests_per_requirement)
+        if stage.name == "readme":
+            return readme_problems(self.read("README.md"))
         return self.tests_problems(written)
 
     def tests_problems(self, written: list[str]) -> list[str]:
@@ -289,6 +307,18 @@ class Build:
             if not any(under(f"{self.tests_dir}/{kind}", rel) and "def test_" in self.read(rel) for rel in all_tests):
                 problems.append(f"There are no tests in {self.tests_dir}/{kind}/; the suite needs both unit tests "
                                 "(external connections mocked) and e2e tests (real services, no mocks).")
+        mocking = [rel for rel in all_tests if under(f"{self.tests_dir}/e2e", rel) and re.search(
+            r"\bunittest\.mock\b|\bmock\.patch\b|\bpatch\(|\bMagicMock\b|\bMock\(|\brespx\b|requests_mock|"
+            r"\bresponses\.activate\b|\bmocker\b", self.read(rel))]
+        if mocking:
+            problems.append(f"The e2e tests must not mock anything; found mocks in {', '.join(mocking)}. Call the "
+                            "real code and real services, and assert on their real results.")
+        unit = "\n".join(self.read(rel) for rel in all_tests if under(f"{self.tests_dir}/unit", rel))
+        if re.search(r"\bpatch(?:\.object)?\(", unit) and not re.search(
+                r"autospec\s*=\s*True|create_autospec|\bspec(?:_set)?\s*=", unit):
+            problems.append("The unit tests mock with patch(...) but never with autospec=True (or spec=), so a mock "
+                            "of a function that doesn't exist would silently pass. Use autospec when mocking "
+                            "functions, methods and classes.")
         reqs = requirement_ids(self.read(self.spec))
         missing = [f"R{n}" for n in reqs if not mentions_requirement(source, n)]
         if missing:
@@ -420,7 +450,7 @@ class Build:
 
     # --- stages -----------------------------------------------------------------------------------
     def write_spec(self) -> None:
-        banner(f"1/4  Spec: Gemini writes {self.spec}")
+        banner(f"1/5  Spec: Gemini writes {self.spec}")
         self.use_thinking_model(self.args.spec_model)
         self.ws.guard = only(lambda rel: rel == self.spec, f"only {self.spec} may be written while writing the spec")
         files, layout = self.fresh_context()
@@ -443,7 +473,7 @@ class Build:
             print(paint("  Gemini didn't cite any web sources; the spec will rest on what it already knows.", YELLOW))
 
     def write_plan(self) -> None:
-        banner(f"2/4  Test plan: Gemini plans the test suite in {self.plan}")
+        banner(f"2/5  Test plan: Gemini plans the test suite in {self.plan}")
         self.chat.new_chat()
         self.use_thinking_model(self.args.plan_model or self.args.spec_model)
         self.ws.guard = only(lambda rel: rel == self.plan, f"only {self.plan} may be written while planning tests")
@@ -455,7 +485,7 @@ class Build:
         self.discuss(prompt, self.stages["plan"])
 
     def write_tests(self) -> None:
-        banner(f"3/4  Tests: Gemini writes {self.tests_dir}/unit/ and {self.tests_dir}/e2e/ from the plan")
+        banner(f"3/5  Tests: Gemini writes {self.tests_dir}/unit/ and {self.tests_dir}/e2e/ from the plan")
         self.chat.new_chat()
         self.use_model(self.args.tests_model or self.code_model())
         self.ws.guard = only(lambda rel: under(self.tests_dir, rel) and rel != self.plan,
@@ -467,7 +497,7 @@ class Build:
                                            self.args.test, self.tests_dir, files, layout), self.stages["tests"])
 
     def write_code(self) -> bool:
-        banner(f"4/4  Code: Gemini implements until `{self.args.test}` passes ({self.spec} and tests locked)")
+        banner(f"4/5  Code: Gemini implements until `{self.args.test}` passes ({self.spec} and tests locked)")
         self.chat.new_chat()
         self.use_model(self.code_model())
         self.ws.guard = lambda rel: (f"{rel} is part of the agreed spec/tests and is locked; change the "
@@ -483,12 +513,40 @@ class Build:
                        self.args.max_iters, message)
         return loop.run(prompt, (code, out))
 
+    def write_readme(self) -> None:
+        banner("5/5  README: Gemini writes install, run and usage instructions")
+        self.chat.new_chat()
+        self.use_model(self.code_model())
+        self.ws.guard = only(lambda rel: rel == "README.md", "only README.md may be written now")
+        files, layout = self.fresh_context()
+        files.pop(self.spec, None)
+        files.pop("README.md", None)
+        prompt = protocol.readme_prompt(self.read(self.spec), self.spec, self.args.test, files, layout)
+        self.discuss(prompt, self.stages["readme"])
+        self.show_how_to_run()
+
+    def show_how_to_run(self) -> None:
+        """Print the README's install/configure/run sections, so the build ends with how to launch it."""
+        text = self.read("README.md")
+        lines, found = text.splitlines(), protocol.headings(text.splitlines())
+        keep = []
+        for n, (i, level, title) in enumerate(found):
+            if re.search(r"install|setup|set up|configur|run|start|launch", title, re.I):
+                end = next((j for j, lv, _ in found[n + 1:] if lv <= level), len(lines))
+                keep.append("\n".join(lines[i:end]).strip())
+        if keep:
+            print(paint("\n── How to run it (from README.md) " + "─" * 30, GREEN, BOLD))
+            print(self.ws.hl.code("\n\n".join(keep), self.ws.hl.lexer_for(text, "README.md")))
+
     def run(self) -> bool:
         start = STAGES.index(self.args.start)
         for i, step in enumerate((self.write_spec, self.write_plan, self.write_tests)):
             if start <= i:
                 step()
-        return self.write_code()
+        passed = self.write_code() if start <= STAGES.index("code") else True
+        if passed and self.args.readme:
+            self.write_readme()
+        return passed
 
 
 def main(argv: list[str]) -> int:

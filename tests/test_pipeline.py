@@ -67,11 +67,12 @@ def build(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "stdin", io.StringIO(""))
     monkeypatch.setattr(loop_module.time, "sleep", lambda s: None)
 
-    def make(replies, *extra, reviews=(), research=False):
+    def make(replies, *extra, reviews=(), research=False, readme=False):
         """replies: the writer's; reviews: the independent reviewer's (reviews and web research are off unless
         asked for)."""
         args = build_parser().parse_args(["add numbers", "--dir", str(tmp_path), "--accept",
                                           *([] if research else ["--no-research"]),
+                                          *([] if readme else ["--no-readme"]),
                                           "-t", f"{sys.executable} -m pytest -q -p no:cacheprovider",
                                           "--spec-reviews", "0", "--plan-reviews", "0", "--tests-reviews", "0",
                                           "--tests-per-requirement", "1", *extra])
@@ -331,3 +332,47 @@ def test_interface_must_cover_the_source_files_in_the_architecture():
     assert source_files(spec) == ["hn.py", "App.tsx", "StoryCard.tsx"]  # no __init__, main, or config files
     (problem,) = spec_problems(spec)
     assert "doesn't cover these files" in problem and "StoryCard.tsx" in problem and "App.tsx" not in problem
+
+
+README = ("# Adder\n\nAdds numbers.\n\n## Install\n```sh\npip install -e .\n```\n\n## Configure\nNothing to "
+          "configure.\n\n## Run\n```sh\npython -c 'from add import add; print(add(2, 3))'\n```\n\n## Usage\n"
+          "`add(2, 3)` returns 5.\n\n## Tests\n```sh\npytest -q\n```\n")
+
+
+def test_build_ends_with_a_readme_and_prints_how_to_run_it(build, tmp_path):
+    b, chat, _ = build([SPEC, PLAN, reply(*TESTS), reply(("add.py", CODE)),
+                        reply(("add.py", "sneaky\n")) + [{"kind": "text", "text": "x"}], README], readme=True)
+    # the README writer's first reply tries to change code (refused) and has no README; the second is the README
+    passed, printed = run_quiet(b.run)
+    assert passed and (tmp_path / "README.md").read_text() == README
+    assert (tmp_path / "add.py").read_text() == CODE and "only README.md may be written" in printed
+    assert "5/5  README" in printed and "How to run it (from README.md)" in printed
+    assert "pip install -e ." in printed.split("How to run it")[1] and "## Tests" not in printed.split("How to run it")[1]
+    readme_prompt = chat.sent[4]
+    assert "FILE: add.py" in readme_prompt and SPEC.strip() in readme_prompt  # written from the real code
+
+
+def test_readme_without_run_or_usage_sections_is_sent_back(build, tmp_path):
+    (tmp_path / "SPEC.md").write_text(SPEC)
+    b, chat, _ = build(["# Adder\n\nIt adds numbers.\n\n## Install\npip install it\n", README], "--from", "readme",
+                       readme=True)
+    run_quiet(b.run)
+    assert "how to run it" in chat.sent[1] and "how to use it" in chat.sent[1] and "code blocks" in chat.sent[1]
+    assert (tmp_path / "README.md").read_text() == README
+
+
+def test_e2e_mocks_and_unit_mocks_without_autospec_are_sent_back(build, tmp_path):
+    (tmp_path / "SPEC.md").write_text(SPEC)
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests/TEST_PLAN.md").write_text(PLAN)
+    unit = ("from unittest.mock import patch\nimport add\n\n\ndef test_r1_adds():\n"
+            "    with patch('add.helper') as h:\n        assert add.add(2, 3) == 5\n")
+    e2e = ("from unittest.mock import MagicMock\nfrom add import add\n\n\ndef test_r1_e2e_adds():\n"
+           "    assert add(2, 3) == 5\n")
+    b, chat, _ = build([reply(("tests/unit/test_add.py", unit), ("tests/e2e/test_add_e2e.py", e2e)), reply(*TESTS),
+                        reply(("add.py", CODE))], "--from", "tests")
+    passed, _ = run_quiet(b.run)
+    assert passed
+    problems = chat.sent[1]
+    assert "e2e tests must not mock anything" in problems and "tests/e2e/test_add_e2e.py" in problems
+    assert "never with autospec=True" in problems

@@ -297,7 +297,10 @@ def tests_review_prompt(spec: str, spec_path: str, plan: str, plan_path: str, te
         "tested (list what's missing by name);\n"
         "- names, signatures, types and exceptions match the spec's Interface exactly;\n"
         "- expected values are actually correct;\n"
-        "- unit tests mock every external connection and test its failures; e2e tests use no mocks;\n"
+        "- unit tests mock every external connection with autospec (a mock of something that doesn't exist must "
+        "fail) and test its failures; e2e tests use no mocks;\n"
+        "- every e2e test asserts that its real integration produced real results (not just that nothing crashed: "
+        "it must fail if the external call returns nothing or errors);\n"
         "- the tests don't demand things the spec doesn't promise;\n"
         "- tests are independent and deterministic, and would fail only for a missing or wrong implementation.",
         f"{spec_path}:\n{fenced(spec, 'markdown')}",
@@ -355,11 +358,16 @@ WHAT A GOOD TEST SUITE LOOKS LIKE
 TWO KINDS OF TESTS, IN TWO FOLDERS
 - {tests_dir}/unit/: fast, isolated tests of each component. Mock every external connection (network/HTTP,
   databases, other services, subprocesses, the clock) at the boundary. Test how the code talks to them (called
-  with the right arguments) and how it handles their failures (errors, timeouts, bad data).
+  with the right arguments) and how it handles their failures (errors, timeouts, bad data). Mock with
+  autospec (patch(..., autospec=True), create_autospec, or spec=), so a mock of a function, method or
+  attribute that doesn't really exist fails instead of silently passing.
 - {tests_dir}/e2e/: the whole system through its real entry points (public API, CLI) with NO mocks. If it
-  uses real services or the network, call them for real: network access is available. Check observable
-  outcomes; where real data varies, check its shape and invariants rather than exact values. Skip only when a
-  required credential is truly missing, and say why.
+  uses real services or the network, call them for real: network access is available. Each e2e test must
+  PROVE its real integration works: assert on the real results (data came back, the fields that matter are
+  filled in, files were actually produced), never just that nothing crashed. A test that passes when every
+  external call fails proves nothing; graceful failure belongs in the mocked unit tests. Where real data
+  varies, check its shape and invariants rather than exact values. Skip only when a required credential is
+  truly missing, and say why.
 """
 
 TEST_PLAN_TEMPLATE = """\
@@ -416,8 +424,10 @@ def plan_review_prompt(spec: str, spec_path: str, plan: str, per_requirement: in
         guide(tests_dir),
         "Look for: requirements, acceptance criteria, examples, errors or boundaries with no test case; fewer than "
         f"{per_requirement} test cases for a requirement; expected results that are wrong or vague; unit tests "
-        "that would touch real external services instead of mocks; e2e tests that use mocks; missing failure "
-        "handling (errors, timeouts, bad data) for external connections; tests of things the spec doesn't promise.",
+        "that would touch real external services instead of mocks, or mock without autospec; e2e tests that use "
+        "mocks, or that would still pass if the real integration returned nothing (they must assert real results); "
+        "missing failure handling (errors, timeouts, bad data) for external connections; tests of things the spec "
+        "doesn't promise.",
         f"{spec_path}:\n{fenced(spec, 'markdown')}",
         f"TEST PLAN:\n{fenced(plan, 'markdown')}",
         REVIEW_FORMAT,
@@ -480,3 +490,47 @@ def implement_message(spec_path: str, tests_dir: str, test_cmd: str) -> str:
             f"example a conftest.py or pyproject.toml). The unit tests mock external connections; the e2e tests "
             f"call real services, and network access is available. If a test looks wrong, say so in your reply "
             f"instead of working around it.")
+
+
+README_RULES = doc_rules("README")
+
+README_TEMPLATE = """\
+# <Project name>
+
+One or two sentences: what it is and who it's for.
+
+## Install
+Every step from a fresh checkout, as commands: runtime version, creating a virtual environment, installing
+dependencies, and any extra setup (e.g. `playwright install chromium`, `npm install` in a frontend folder).
+
+## Configure
+Environment variables, config files and API keys, with defaults. Say "Nothing to configure." if so.
+
+## Run
+The exact commands to start it (servers with host and port, background workers, the frontend dev server),
+and what you should see when it's working (e.g. which URL to open).
+
+## Usage
+How to use it, with real examples: CLI commands and their output, HTTP endpoints with example requests
+and responses, or what to click in the UI.
+
+## Tests
+How to run the unit tests and the end-to-end tests, and what the e2e tests need (e.g. network access).
+"""
+
+
+def readme_prompt(spec: str, spec_path: str, test_cmd: str, files: dict[str, str], layout: str) -> str:
+    return "\n\n".join(filter(None, [
+        "The project below is implemented and its tests pass. Write its README.md: the document someone reads to "
+        "install it, run it and use it. Base every command, name, port, endpoint and option on the actual code "
+        "below (not just the spec), so the instructions work when followed exactly.",
+        f"Follow this template and keep every section:\n{fenced(README_TEMPLATE, 'markdown')}",
+        f"The tests run as `{test_cmd}` from the project root.",
+        f"{spec_path}:\n{fenced(spec, 'markdown')}",
+        *_context(files, layout),
+        README_RULES,
+    ]))
+
+
+def readme_document(markdown: str) -> str | None:
+    return document(markdown, r"install|usage|run")
