@@ -541,6 +541,12 @@ def readme_document(markdown: str) -> str | None:
 CHECK_FORMAT = ("For each one: a short line saying what it checks, then a line `COMMAND:` and a code block containing "
                 "only the command. Don't change or create any files.")
 
+CHECK_VERDICT = ("Each command must report its own verdict: print exactly one line starting with `PASS:` or `FAIL:` "
+                 "that says what was expected and what actually happened (e.g. `FAIL: expected 2 lines, got 5`), and "
+                 "exit 0 for PASS and 1 for FAIL. If the program can't run at all, that's a FAIL too: catch it and "
+                 "report it (e.g. `FAIL: the program exited 2: unrecognized arguments: --top`), don't let the check "
+                 "crash. A short `python3 -c` script is usually the easiest way to do this.")
+
 
 def check_prompt(check: str, files: dict[str, str], layout: str) -> str:
     return "\n\n".join(filter(None, [
@@ -551,6 +557,7 @@ def check_prompt(check: str, files: dict[str, str], layout: str) -> str:
         "- run from the project root using what's already installed, finish within a few seconds, and not change "
         "any files;\n"
         "- not use the network unless the check is about something online.",
+        CHECK_VERDICT,
         CHECK_FORMAT,
         layout,
         "PROJECT FILES:\n\n" + "\n\n".join(f"FILE: {rel}\n{fenced(t)}" for rel, t in files.items()) if files else "",
@@ -565,6 +572,7 @@ def check_retry_prompt(feedback: str, tried: list[tuple[str, int, str]]) -> str:
         results,
         "Propose 3 to 5 different candidate commands, with the same requirements (exit code is the result, no file "
         "changes, fast).",
+        CHECK_VERDICT,
         CHECK_FORMAT,
     ]))
 
