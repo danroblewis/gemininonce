@@ -158,9 +158,13 @@ EXTRACT_MD_JS = """
 
 # External links in a reply (Gemini's citations when it searched the web), without Google's own links.
 SOURCES_JS = """
-(root) => Array.from(new Set(Array.from(root.querySelectorAll('a[href]'))
+(root) => {
+  // Google's own search, sign-in and Gemini links, and its asset hosts; real docs (developers.google.com) count.
+  const NOT_SOURCES = /^https?:\\/\\/(gemini\\.google\\.com|accounts\\.google\\.com|(www\\.)?google\\.com\\/(search|url)|[^/]*\\.gstatic\\.com|[^/]*\\.googleusercontent\\.com)/;
+  return Array.from(new Set(Array.from(root.querySelectorAll('a[href]'))
   .map(a => a.href.replace(/[?&]utm_source=gemini$/, '').replace(/([?&])utm_source=gemini&/, '$1'))
-  .filter(h => /^https?:/.test(h) && !/^https?:\\/\\/([^/]*\\.)?(google|gstatic|googleusercontent|youtube)\\.com\\//.test(h))))
+  .filter(h => /^https?:/.test(h) && !NOT_SOURCES.test(h))));
+}
 """
 
 

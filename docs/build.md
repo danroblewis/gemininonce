@@ -13,6 +13,13 @@ to write its own files:
    methods, functions, exceptions), data model, numbered requirements with acceptance criteria,
    examples, errors, measurable non-functional requirements, and its assumptions. It's told that
    the test writer will see *only* this file, so nothing may be left to guess.
+   - **Web research first:** before writing, Gemini gets a short research question: existing
+     libraries and prior art, current docs of any library, API or service, standards, algorithms,
+     pitfalls. It's a separate short question because Gemini searches for questions like that, but
+     rarely while writing a long document. The sources it cites are shown (`sources: 7 (…)`), and
+     the spec's section 11 lists them with links and what was taken from each. If it cites nothing,
+     it's asked once more to search. `--no-research` skips this. The test planner is also asked to
+     check the current docs of any real services the e2e tests will call.
    - **The spec is Gemini's answer itself,** not a `FILE:` block. A spec has code blocks in it,
      and Gemini's page can't show a code block inside another one. The rendered answer is converted
      back to Markdown (headings, lists, code blocks, tables) and saved as `SPEC.md`, starting from

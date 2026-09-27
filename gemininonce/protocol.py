@@ -160,12 +160,20 @@ The sources you researched, as links, and what you took from each (an API, an al
 a library version, a pitfall to avoid).
 """
 
+def research_prompt(idea: str) -> str:
+    """A short question, which makes Gemini actually search (a long document request usually doesn't)."""
+    return (f"Research this on the web before we design it: {idea}. Look up existing libraries and prior art, "
+            "the current documentation of any library, API or service it would use (exact endpoints, parameters, "
+            "formats, versions), relevant standards, well-known algorithms, and common pitfalls. Give me a short "
+            "research summary with a link for every source.")
+
+
+RESEARCH_RETRY = ("Please use Google Search now to check current sources, and give the research summary again "
+                  "with a link for every source.")
+
 SPEC_RESEARCH = (
-    "RESEARCH FIRST: before writing, use Google Search to research the idea, and base the spec on what you "
-    "find rather than on memory alone. Look for existing libraries and prior art (and whether to build on "
-    "them), the current documentation of any library, API or service it will use (exact endpoints, "
-    "parameters, formats, versions), relevant standards and file formats, well-known algorithms, and common "
-    "pitfalls. List every source you used, with its link, in section 11.")
+    "Base the spec on your research above rather than on memory alone, search again if you need more, and list "
+    "every source you used, with its link, in section 11.")
 
 PLAN_RESEARCH = (
     "If the project talks to real external services, use Google Search to check their current documentation "

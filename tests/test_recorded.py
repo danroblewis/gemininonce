@@ -10,7 +10,7 @@ from conftest import RECORDED, load_recording, session_rounds
 
 from gemininonce import loop as loop_module
 from gemininonce import protocol
-from gemininonce.gemini import EXTRACT_JS, EXTRACT_MD_JS
+from gemininonce.gemini import EXTRACT_JS, EXTRACT_MD_JS, SOURCES_JS
 from gemininonce.loop import FixLoop
 from gemininonce.merge import looks_partial
 from gemininonce.transcript import Transcript
@@ -346,3 +346,23 @@ def test_round_limit_without_a_terminal_just_stops(todo_project, no_input, tmp_p
     loop.max_iters = 2
     passed, printed = quiet(loop.run, protocol.initial_prompt("", "", files), None)
     assert not passed and len(chat.sent) == 2 and "Gave up after 2 rounds" in printed
+
+
+def test_links_keep_their_urls_and_cited_sources_are_collected(page):
+    """A researched reply cites sources: links become [text](url) without Google's tracking parameter,
+    and SOURCES_JS lists the external ones (not Google's own links)."""
+    page.set_content("""<message-content><div class="markdown">
+        <p>Use <a href="https://docs.python.org/3/library/tomllib.html?utm_source=gemini">the tomllib docs</a>
+        and <a href="https://pypi.org/project/pytest/?utm_source=gemini">https://pypi.org/project/pytest/</a>.</p>
+        <p>More: <a href="https://www.google.com/search?q=x">search</a>
+        <a href="https://developers.google.com/optimization/cp/queens?utm_source=gemini">OR-Tools</a>
+        <source-inline-chip><a href="https://github.com/pytest-dev/pytest?utm_source=gemini">GitHub</a></source-inline-chip></p>
+        </div></message-content>""")
+    body = page.locator("message-content").first
+    md = body.evaluate(EXTRACT_MD_JS)
+    assert "[the tomllib docs](https://docs.python.org/3/library/tomllib.html)" in md
+    assert "<https://pypi.org/project/pytest/>" in md and "utm_source" not in md
+    assert body.evaluate(SOURCES_JS) == ["https://docs.python.org/3/library/tomllib.html",
+                                         "https://pypi.org/project/pytest/",
+                                         "https://developers.google.com/optimization/cp/queens",
+                                         "https://github.com/pytest-dev/pytest"]

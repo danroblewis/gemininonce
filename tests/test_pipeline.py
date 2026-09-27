@@ -6,6 +6,7 @@ import sys
 import pytest
 
 from gemininonce import loop as loop_module
+from gemininonce import protocol
 from gemininonce.highlight import Highlighter
 from gemininonce.pipeline import Build, build_parser
 from gemininonce.transcript import Transcript
@@ -45,6 +46,7 @@ class ScriptedChat:
         r = self.replies.pop(0)
         self.usage.record(len(text), 100)
         self.last_markdown = r if isinstance(r, str) else ""
+        self.last_sources = ["https://example.org/doc"] if isinstance(r, str) and "(https://" in r else []
         return [{"kind": "text", "text": r}] if isinstance(r, str) else r
 
     def new_chat(self):
@@ -65,9 +67,11 @@ def build(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "stdin", io.StringIO(""))
     monkeypatch.setattr(loop_module.time, "sleep", lambda s: None)
 
-    def make(replies, *extra, reviews=()):
-        """replies: the writer's; reviews: the independent reviewer's (reviews are off unless asked for)."""
+    def make(replies, *extra, reviews=(), research=False):
+        """replies: the writer's; reviews: the independent reviewer's (reviews and web research are off unless
+        asked for)."""
         args = build_parser().parse_args(["add numbers", "--dir", str(tmp_path), "--accept",
+                                          *([] if research else ["--no-research"]),
                                           "-t", f"{sys.executable} -m pytest -q -p no:cacheprovider",
                                           "--spec-reviews", "0", "--plan-reviews", "0", "--tests-reviews", "0",
                                           "--tests-per-requirement", "1", *extra])
@@ -257,3 +261,31 @@ def test_tests_need_unit_and_e2e_every_requirement_and_enough_cases(build, tmp_p
     assert "no tests in tests/e2e/" in problems
     assert "No tests mention R2" in problems
     assert "Only 1 test functions for 2 requirements" in problems
+
+
+def test_spec_starts_with_a_short_research_question_then_builds_on_it(build, tmp_path):
+    """A short question makes Gemini search; if it cites nothing, it's asked once more to search."""
+    b, chat, _ = build(["From memory: backtracking.", "Found [the docs](https://example.org/doc).", SPEC, PLAN],
+                       research=True)
+    _, printed = run_quiet(b.write_spec)
+    run_quiet(b.write_plan)
+    assert chat.sent[0].startswith("Research this on the web before we design it: add numbers")
+    assert chat.sent[1] == protocol.RESEARCH_RETRY and "No sources cited" in printed
+    assert "Base the spec on your research above" in chat.sent[2] and "## 11. References" in chat.sent[2]
+    assert "sources: 1 (example.org)" in printed
+    assert "use Google Search to check their current documentation" in chat.sent[3]  # the planner
+    assert (tmp_path / "SPEC.md").read_text() == SPEC
+
+
+def test_no_research_skips_the_research_step(build, tmp_path):
+    b, chat, _ = build([SPEC])
+    run_quiet(b.write_spec)
+    assert chat.sent[0].startswith("You are a software architect") and "research above" not in chat.sent[0]
+
+
+def test_sources_line_names_the_sites():
+    from gemininonce.transcript import sources_line
+    urls = ["https://docs.python.org/3/a", "https://www.pypi.org/p", "https://docs.python.org/3/b",
+            "https://github.com/x", "https://en.wikipedia.org/w", "https://stackoverflow.com/q"]
+    assert sources_line(urls) == ("sources: 6 (docs.python.org, pypi.org, github.com, en.wikipedia.org, "
+                                  "+1 more)")

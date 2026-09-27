@@ -204,7 +204,11 @@ class Build:
                 time.sleep(5)
                 continue
             notes = self.ws.apply(edits)
-            written = list(dict.fromkeys(self.ws.written[written_before:]))
+            # What this stage has produced: files it wrote, plus files that already held exactly what it sent
+            # (e.g. re-running a stage and getting the same document back).
+            unchanged = [rel for rel, text in edits if (self.ws.root / rel).is_file()
+                         and self.read(rel) == (text if text.endswith("\n") else text + "\n")]
+            written = list(dict.fromkeys(self.ws.written[written_before:] + unchanged))
             problems = self.check(stage, written) if written else []
             if problems and attempts < self.args.patience:  # fix the mechanical stuff before asking anyone
                 attempts += 1
@@ -394,9 +398,23 @@ class Build:
         self.use_thinking_model(self.args.spec_model)
         self.ws.guard = only(lambda rel: rel == self.spec, f"only {self.spec} may be written while writing the spec")
         files, layout = self.fresh_context()
+        if self.args.research:
+            self.research()
         prompt = protocol.spec_prompt(self.args.idea, self.spec, self.args.test, files, layout,
                                       may_ask=not self.args.accept, research=self.args.research)
         self.discuss(prompt, self.stages["spec"])
+
+    def research(self) -> None:
+        """Web research before the spec, in the spec writer's conversation. It's a separate short question
+        because Gemini searches for questions like that, but rarely while writing a long document."""
+        print(paint("\n  ▶ Research: Gemini searches the web for prior art, docs, algorithms and pitfalls", BLUE, BOLD))
+        loop = FixLoop(self.chat, self.ws, self.transcript, retries=self.args.retries)
+        loop._exchange(protocol.research_prompt(self.args.idea))
+        if not getattr(self.chat, "last_sources", None):
+            print(paint("  No sources cited; asking it to search", YELLOW))
+            loop._exchange(protocol.RESEARCH_RETRY)
+        if not getattr(self.chat, "last_sources", None):
+            print(paint("  Gemini didn't cite any web sources; the spec will rest on what it already knows.", YELLOW))
 
     def write_plan(self) -> None:
         banner(f"2/4  Test plan: Gemini plans the test suite in {self.plan}")
