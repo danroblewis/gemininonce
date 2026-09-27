@@ -142,12 +142,15 @@ Other options: `--root` sets the project root that paths are relative to, and
 ## Cost estimate
 
 Gemini web is flat-rate on a personal or Workspace plan, so a run costs nothing extra. The tool
-shows what the same conversation **would cost on the Gemini API**. It prints a running total after
-every Gemini reply:
+shows what the same conversation **would cost on the Gemini API**. After every Gemini reply, a
+green line shows what that reply cost and the running total:
 
 ```
-  usage so far: ~14.5k tokens in, ~643 out, ~$0.0060 API-equivalent
+  $ this reply: ~4.7k in, ~442 out, $0.0025  |  total: ~11.5k in, ~1.0k out, $0.0060
 ```
+
+If a round took several messages (file requests, retries), a round subtotal follows, e.g.
+`$ round 3: …  |  total: …`.
 
 and a summary at the end:
 

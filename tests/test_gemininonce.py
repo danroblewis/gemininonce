@@ -155,3 +155,13 @@ def test_highlighter_picks_languages(monkeypatch):
     assert Highlighter.lexer_for("--- a\n+++ b\n@@ -1 +1 @@\n-a\n+b\n").name == "Diff"
     assert Highlighter.lexer_for("hello friend") is None
     assert Highlighter().output("E   AssertionError: boom").startswith("\033[31m")
+
+
+def test_step_cost_is_the_difference_and_adds_up():
+    u = Usage()
+    u.record(40000, 4000)
+    u.record(8000, 4000)
+    line = u.step("3.1 Pro", 1, "this reply")
+    # reply 2 alone: input (44k+8k)/4 = 13k tokens, output 1k -> 13k*$2 + 1k*$12 per 1M = $0.038
+    assert line == "this reply: ~13.0k in, ~1.0k out, $0.0380  |  total: ~23.0k in, ~2.0k out, $0.0700"
+    assert "no API price known for 'Mystery'" in u.step("Mystery", 1, "this reply")

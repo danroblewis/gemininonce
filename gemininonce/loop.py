@@ -52,7 +52,8 @@ class FixLoop:
             print(paint(f"\n  {e}", YELLOW))
             return []
         self.transcript.reply(blocks)
-        print(paint(f"  {self.chat.usage.running(self.chat.model)}", DIM))
+        usage = self.chat.usage
+        print(paint(f"  $ {usage.step(self.chat.model, len(usage.turns) - 1, 'this reply')}", GREEN))
         return blocks
 
     def ask_for_code(self, prompt: str):
@@ -121,7 +122,10 @@ class FixLoop:
         stalled = 0
         for i in range(1, self.max_iters + 1):
             print(paint(f"\n━━━ Round {i} " + "━" * 50, BLUE, BOLD))
+            round_start = len(self.chat.usage.turns)
             edits, commands, _ = self.ask_for_code(prompt)
+            if len(self.chat.usage.turns) - round_start > 1:  # several messages this round: subtotal
+                print(paint(f"  $ {self.chat.usage.step(self.chat.model, round_start, f'round {i}')}", GREEN, BOLD))
             print()
             notes = self.ws.apply(edits)
             results = self.ws.review_commands(commands, self.test)

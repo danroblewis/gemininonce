@@ -119,7 +119,8 @@ def test_recorded_session_replays_to_passing_tests(todo_project, no_input, tmp_p
         assert chat.sent[i + 1] == chat.sent[i]
     assert subprocess.run(PYTEST, shell=True, cwd=todo_project, capture_output=True).returncode == 0
     assert (tmp_path / "backups/todo/utils.py").exists()  # originals were backed up
-    assert "usage so far: ~" in printed and "API-equivalent" in printed  # running cost after each reply
+    assert printed.count("$ this reply: ~") == len(session_rounds())  # cost of every reply...
+    assert "  |  total: ~" in printed and "$ round 6: ~" in printed  # ...the running total, and round subtotals
 
 
 def test_error_reply_is_retried_with_same_prompt(no_input):

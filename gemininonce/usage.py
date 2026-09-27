@@ -42,13 +42,14 @@ class Usage:
             return rates[0], rates[1], rates[0], rates[1]
         return PRICES.get((model or "").lower())
 
-    def totals(self, model: str | None, price: str | None = None) -> tuple[float, float, float | None]:
-        """(input tokens, output tokens, API-equivalent USD or None if no price is known). The API is
-        stateless, so each message re-sends the whole conversation so far as input; that's counted here
-        (without context caching discounts)."""
+    def totals(self, model: str | None, price: str | None = None, upto: int | None = None
+               ) -> tuple[float, float, float | None]:
+        """(input tokens, output tokens, API-equivalent USD or None if no price is known) for the first
+        `upto` messages (all by default). The API is stateless, so each message re-sends the whole
+        conversation so far as input; that's counted here (without context caching discounts)."""
         rates = self._rates(model, price)
         history, tok_in, tok_out, cost = 0, 0.0, 0.0, 0.0
-        for sent, received in self.turns:
+        for sent, received in self.turns[:upto]:
             i, o = (history + sent) / CHARS_PER_TOKEN, received / CHARS_PER_TOKEN
             tok_in, tok_out = tok_in + i, tok_out + o
             if rates:
@@ -57,11 +58,21 @@ class Usage:
             history += sent + received
         return tok_in, tok_out, cost if rates else None
 
-    def running(self, model: str | None) -> str:
-        """One-line running total, printed after each reply."""
-        tok_in, tok_out, cost = self.totals(model)
-        money = f", ~${cost:.4f} API-equivalent" if cost is not None else ""
-        return f"usage so far: ~{_k(tok_in)} tokens in, ~{_k(tok_out)} out{money}"
+    def step(self, model: str | None, since: int, label: str) -> str:
+        """Cost of the messages after the first `since`, and the running total, on one line, e.g.
+        "this reply: ~6.7k in, ~293 out, $0.0035  |  total: ~21.0k in, ~1.8k out, $0.0109"."""
+        all_in, all_out, all_cost = self.totals(model)
+        before_in, before_out, before_cost = self.totals(model, upto=since)
+
+        def part(name, tin, tout, cost):
+            return f"{name}: ~{_k(tin)} in, ~{_k(tout)} out" + (f", ${cost:.4f}" if cost is not None else "")
+
+        line = (part(label, all_in - before_in, all_out - before_out,
+                     None if all_cost is None else all_cost - before_cost)
+                + "  |  " + part("total", all_in, all_out, all_cost))
+        if all_cost is None:
+            line += f"  (no API price known for {model or 'this model'!r}; see --price)"
+        return line
 
     def report(self, model: str | None, price: str | None = None) -> str:
         tok_in, tok_out, cost = self.totals(model, price)
