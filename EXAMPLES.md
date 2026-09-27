@@ -174,7 +174,7 @@ pydantic>=1.10,<2 in requirements.txt." --dir . --anonymous
 
 pip install -U "pydantic>=2"      # break it
 pytest -q                          # see what broke
-gemininonce ghrepo tests -t "pytest -q" --network --anonymous \
+gemininonce . -t "pytest -q" --network --anonymous \
   -m "We upgraded to Pydantic v2. Migrate the code to the Pydantic v2 API (no v1 compatibility shims) \
       and update requirements.txt."
 ```
@@ -197,7 +197,7 @@ max age. Pin sqlalchemy>=1.4,<1.5 in requirements.txt." --dir . --anonymous
 
 pip install -U "sqlalchemy>=2"    # break it
 pytest -q
-gemininonce pypicache tests -t "pytest -q" --network --anonymous \
+gemininonce . -t "pytest -q" --network --anonymous \
   -m "We upgraded to SQLAlchemy 2.0. Migrate to the 2.0 API (connections and sessions with explicit \
       commits, select() without lists) and update requirements.txt."
 ```
@@ -216,7 +216,7 @@ the official Firebase API (https://hacker-news.firebaseio.com/v0/topstories.json
 using the requests library (synchronous), with a timeout and one retry per request, and prints the top N \
 stories with score, comment count and domain." --dir . --anonymous
 
-gemininonce hnfront tests -t "pytest -q" --network --anonymous \
+gemininonce . -t "pytest -q" --network --anonymous \
   -m "Replace requests with httpx and make the library async (httpx.AsyncClient, fetching items \
       concurrently with asyncio.gather, keeping the timeout and retry). The CLI stays synchronous from the \
       user's point of view. Update the tests (pytest-asyncio) and requirements.txt."
@@ -238,7 +238,7 @@ gemininonce build "A Python CLI, pkghistory, that lists every released version o
 upload date and whether it was yanked, oldest first, using the 'releases' field of the PyPI JSON API \
 (https://pypi.org/pypi/<name>/json). Options: --since DATE and --latest N." --dir . --anonymous
 
-gemininonce pkghistory tests -t "pytest -q" --network --anonymous \
+gemininonce . -t "pytest -q" --network --anonymous \
   -m "The 'releases' field of PyPI's /pypi/<name>/json API is deprecated. Switch to the PyPI simple JSON \
       API (PEP 691 and PEP 700: https://pypi.org/simple/<name>/ with the Accept header \
       application/vnd.pypi.simple.v1+json), which lists files with upload times and yanked status per file; \
