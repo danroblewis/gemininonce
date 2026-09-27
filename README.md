@@ -212,5 +212,24 @@ These are rough guard rails, not a guarantee. You should still review what Gemin
 
 ## When it breaks
 
-Gemini's DOM changes from time to time. The selectors are constants at the top of `gemininonce.py`. The
-last reply's HTML is saved to `~/.gemininonce/last_response.html` so you can see what changed.
+Gemini's page structure changes from time to time. The selectors are constants at the top of
+`gemininonce/gemini.py`. The last reply's HTML is saved to `~/.gemininonce/last_response.html`, so
+you can see what changed.
+
+## Code layout
+
+| Module | What's in it |
+|---|---|
+| `cli.py` | Command-line options and setup checks (anonymous confirmation, environment variables); connects the pieces |
+| `loop.py` | `FixLoop`: rounds of ask, apply, test; retries on replies without code; stops when the test output stops changing |
+| `gemini.py` | `GeminiChat`: the Gemini page (selectors, account checks, model picker, sending a message and reading the reply) |
+| `browser.py` | `Browser`: launching Chrome with Playwright (profile, hidden or visible, user-agent) |
+| `chrome_profiles.py` | Listing and copying your own Chrome profiles |
+| `workspace.py` | `Workspace`: the project on disk (collecting files, applying edits with backups, running commands) |
+| `merge.py` | `Outline` and `merge_partial`: merging partial edits into files by definition name |
+| `protocol.py` | The reply format rules, parsing replies, building prompts |
+| `safety.py` | Sandbox, risky-code patterns, secret detection |
+| `transcript.py`, `highlight.py`, `console.py` | Console output: transcript, syntax highlighting, colors and prompts |
+| `usage.py` | `Usage`: token counts and the API-equivalent cost estimate |
+
+Run the tests with `pytest tests`. They don't need a browser.

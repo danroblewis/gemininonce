@@ -6,11 +6,11 @@ requires-python = ">=3.10"
 dependencies = ["playwright>=1.40", "pygments>=2.15"]
 
 [project.scripts]
-gemininonce = "gemininonce:main"
+gemininonce = "gemininonce.cli:entry"
 
 [build-system]
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-py-modules = ["gemininonce", "gemininonce_safety"]
+packages = ["gemininonce"]

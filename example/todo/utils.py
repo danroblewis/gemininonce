@@ -19,7 +19,7 @@ def parse_due(text: str | None, today: date) -> date | None:
 
 def normalize_tag(tag: str) -> str:
     """'#Work ' -> 'work'"""
-    return tag.strip().lstrip("#")
+    return tag.strip().lstrip("#").lower()
 
 
 def format_todo(todo) -> str:

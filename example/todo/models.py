@@ -16,7 +16,7 @@ class Todo:
     def is_overdue(self, today: date) -> bool:
         if self.done or self.due is None:
             return False
-        return self.due <= today
+        return self.due < today
 
     def to_dict(self) -> dict:
         return {
@@ -35,6 +35,6 @@ class Todo:
             title=d["title"],
             done=d.get("done", False),
             priority=d.get("priority", 2),
-            due=d.get("due"),
+            due=date.fromisoformat(d["due"]) if d.get("due") else None,
             tags=d.get("tags", []),
         )
