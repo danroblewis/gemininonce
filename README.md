@@ -3,7 +3,7 @@
 A small coding agent that drives **Gemini in your browser**, with no API key and no tool calls. It
 sends your code and failing test output to Gemini, writes the files Gemini sends back, re-runs your
 tests, and repeats until they pass. It can also build something new from an idea: spec, then tests,
-then code.
+then a test plan, then tests, then code.
 
 ## Install
 
@@ -22,7 +22,7 @@ gemininonce src/ tests/ -t "pytest -x"
 # Say what you want, too
 gemininonce app.py -t "npm test" -m "the date parser breaks on ISO week dates"
 
-# Build something new: Gemini writes SPEC.md, then tests, then the code (you settle the spec and tests with it)
+# Build something new: spec -> test plan -> unit + e2e tests -> code (you settle each step with Gemini)
 gemininonce build "a constraint solver in python that can solve n-queens" --dir nqueens
 
 # Use your work Google account (reuses your Chrome login: SSO, 2FA)
@@ -70,7 +70,8 @@ and `GEMININONCE_PRICE`. See `gemininonce --help` and `gemininonce build --help`
 ## More
 
 - [How the fix loop works](docs/how-it-works.md): rounds, file requests, retries, partial edits, output, models, cost
-- [`gemininonce build`](docs/build.md): spec, then tests, then code, with independent reviews and locked tests
+- [`gemininonce build`](docs/build.md): spec, then test plan, then tests, then code, with independent reviews and locked tests
+- [Testing](docs/testing.md): what a good test suite looks like, and how `build` gets there
 - [Accounts and anonymous mode](docs/accounts.md): Chrome profiles, account checks, the free tier
 - [Safety](docs/safety.md): sandbox, code checks, secrets
 - [Development](docs/development.md): installing from a clone, updating, uvx, tests, code layout

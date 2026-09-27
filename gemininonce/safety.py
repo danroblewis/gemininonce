@@ -179,19 +179,22 @@ def _sbpl_str(p) -> str:
     return '"' + str(p).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def sandbox_argv(cmd: str, root: Path) -> list[str] | None:
-    """argv running `cmd` sandboxed (no internet, writes only in root/temp, secrets unreadable), or None."""
+def sandbox_argv(cmd: str, root: Path, network: bool = False) -> list[str] | None:
+    """argv running `cmd` sandboxed (writes only in root/temp, secrets unreadable, and no internet unless
+    `network`), or None if no sandbox is available."""
     root = root.resolve()
     if sys.platform == "darwin" and shutil.which("sandbox-exec"):
         writable = [root, "/private/tmp", "/private/var/folders", Path(tempfile.gettempdir()).resolve()]
         profile = "\n".join([
             "(version 1)",
             "(allow default)",
-            "(deny network*)",
-            '(allow network-bind (local ip "localhost:*"))',
-            '(allow network-inbound (local ip "localhost:*"))',
-            '(allow network* (remote ip "localhost:*"))',
-            "(allow network* (remote unix-socket))",
+            *([] if network else [
+                "(deny network*)",
+                '(allow network-bind (local ip "localhost:*"))',
+                '(allow network-inbound (local ip "localhost:*"))',
+                '(allow network* (remote ip "localhost:*"))',
+                "(allow network* (remote unix-socket))",
+            ]),
             "(deny file-write*)",
             "(allow file-write* " + " ".join(f"(subpath {_sbpl_str(p)})" for p in writable) + ' (regex #"^/dev/"))',
             "(deny file-read* " + " ".join(f"(subpath {_sbpl_str(HOME / d)})" for d in SECRET_DIRS)
@@ -200,7 +203,8 @@ def sandbox_argv(cmd: str, root: Path) -> list[str] | None:
         return ["sandbox-exec", "-p", profile, "/bin/sh", "-c", cmd]
     if sys.platform.startswith("linux") and shutil.which("bwrap"):
         argv = ["bwrap", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp",
-                "--bind", str(root), str(root), "--unshare-net", "--die-with-parent", "--chdir", str(root)]
+                "--bind", str(root), str(root), *([] if network else ["--unshare-net"]),
+                "--die-with-parent", "--chdir", str(root)]
         for d in SECRET_DIRS:
             if (HOME / d).is_dir():
                 argv += ["--tmpfs", str(HOME / d)]

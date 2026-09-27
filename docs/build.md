@@ -1,11 +1,11 @@
-# `gemininonce build`: spec → tests → code
+# `gemininonce build`: spec → test plan → tests → code
 
 ```sh
 gemininonce build "A module roman.py with to_roman(n) and from_roman(s) for 1..3999, \
   raising ValueError on bad input" --dir roman
 ```
 
-It works in three stages. Each one gets its own fresh Gemini conversation, and each is only allowed
+It works in four stages. Each one gets its own fresh Gemini conversation, and each is only allowed
 to write its own files:
 
 1. **Spec.** Gemini writes `SPEC.md` from a template: goal, scope, architecture and module layout,
@@ -23,23 +23,23 @@ to write its own files:
      *only* the spec, as the test writer will. It lists everything it would have to guess, or
      replies `NO ISSUES`. The writer revises from that list, and its conversation with you stays
      intact. `--spec-reviews N` sets how many reviews (default 1, 0 to skip).
-   - **Model:** signed in, the spec is written with **Pro**, and later stages switch back. Signed
+   - **Model:** signed in, the spec and the test plan are written with **Pro**, and later stages switch back. Signed
      out (`--anonymous`), Gemini only offers Flash-Lite, so sign in for better specs. Choose
      explicitly with `--spec-model` and `--tests-model`.
-2. **Tests.** From the spec, Gemini writes tests under `tests/`. They must compile, and they must
-   **fail**: tests that pass before any code exists don't test anything, so they're sent back.
-   Then a fresh reviewer session compares the tests with the spec, checking:
-   - every requirement, example and error case is covered
-   - names and signatures match the Interface exactly
-   - expected values are correct
-   - nothing is asserted that the spec doesn't promise, like exact messages, ordering or internals
-
-   The test writer fixes what it finds. `--tests-reviews N` (default 1).
-3. **Code.** The normal fix loop runs until the tests pass. `SPEC.md` and `tests/` are **locked**:
+2. **Test plan.** A planner writes `tests/TEST_PLAN.md` from the spec: the approach and what gets
+   mocked, unit test cases for each requirement, end-to-end scenarios, and a requirement-to-tests
+   coverage table. It's checked mechanically, reviewed by a fresh session against the spec and the
+   testing guide, and then you discuss it with Gemini like the spec. See [testing.md](testing.md).
+3. **Tests.** From the spec and the plan, Gemini writes **unit tests** in `tests/unit/` (external
+   connections mocked) and **end-to-end tests** in `tests/e2e/` (no mocks, real services). They must
+   compile, cover both folders, name every requirement, include enough tests per requirement, and
+   **fail** before any code exists. Then a fresh reviewer checks them against the spec, the plan
+   and the guide, and you discuss them. `--tests-reviews N` (default 1).
+4. **Code.** The normal fix loop runs until the tests pass. `SPEC.md` and `tests/` are **locked**:
    Gemini can't make the tests pass by changing them. An attempt is rejected, and Gemini is told to
    change the implementation instead.
 
-**You settle the spec and tests by talking to Gemini.** You see the file in full, and after that
+**You settle the spec, the plan and the tests by talking to Gemini.** You see the file in full, and after that
 only a diff of what changed. Then you type your reply, and it goes to the same Gemini conversation.
 You can answer its questions (it may ask some before writing anything), ask your own, or ask for
 changes. Repeat until you're happy:
@@ -55,8 +55,11 @@ Other options:
   tests will be run, and the build is only done when that command passes. Use the command you'll
   actually use: for example, `python -m pytest` can import from the project folder when plain
   `pytest` can't.
-- `--spec` and `--tests-dir` rename the spec file and the tests folder.
-- `--from tests` or `--from code` restarts at a later stage and reuses the earlier files.
+- `--spec`, `--plan` and `--tests-dir` rename the spec, the test plan and the tests folder.
+- `--tests-per-requirement N` sets the minimum number of test cases per requirement (default 3).
+- `--plan-reviews`, `--tests-reviews` and `--spec-reviews` set the number of independent reviews (default 1 each).
+- `--no-network` keeps the test command offline (e2e tests need the network, so it's on by default for `build`).
+- `--from plan`, `--from tests` or `--from code` restarts at a later stage and reuses the earlier files.
 - All the usual options work: `--anonymous`, `--chrome-profile`, `--model`, the cost lines, and so on.
 
 In a live anonymous test, the example above went from an empty folder to a spec with 7 numbered

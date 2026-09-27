@@ -52,11 +52,12 @@ class Workspace:
     """
 
     def __init__(self, root: Path, backup_dir: Path, timeout: int = 300, sandbox: bool = True,
-                 allow_new_files: bool = False, highlighter: Highlighter | None = None):
+                 allow_new_files: bool = False, highlighter: Highlighter | None = None, network: bool = False):
         self.root = root
         self.backup_dir = backup_dir
         self.timeout = timeout
         self.sandbox = sandbox
+        self.network = network  # whether the sandboxed test command may use the internet
         self.allow_new_files = allow_new_files
         self.hl = highlighter or Highlighter()
         self.known: set[str] = set()  # files the user chose to send; Gemini may re-read these freely
@@ -208,8 +209,9 @@ class Workspace:
 
     # --- commands -----------------------------------------------------------------------------
     def run(self, cmd: str, sandbox: bool = False) -> tuple[int, str]:
-        argv = safety.sandbox_argv(cmd, self.root) if sandbox else None
-        print(paint(f"$ {cmd}", BOLD) + paint("   [sandboxed]" if argv else "", DIM))
+        argv = safety.sandbox_argv(cmd, self.root, self.network) if sandbox else None
+        label = ("   [sandboxed" + (", network allowed]" if self.network else "]")) if argv else ""
+        print(paint(f"$ {cmd}", BOLD) + paint(label, DIM))
         try:
             r = subprocess.run(argv or cmd, shell=argv is None, cwd=self.root, capture_output=True, text=True,
                                timeout=self.timeout)

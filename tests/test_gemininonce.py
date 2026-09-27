@@ -176,3 +176,13 @@ def test_each_conversation_only_resends_its_own_history():
     u.record(400, 400, a)   # back in the first: its own 4.4k of history + 400
     tok_in, tok_out, _ = u.totals("3.6 flash")
     assert tok_in == (4000 + 4000 + 4800) / 4 and tok_out == 300
+
+
+def test_sandbox_network_is_optional(tmp_path):
+    from gemininonce.safety import sandbox_argv
+    offline, online = sandbox_argv("true", tmp_path), sandbox_argv("true", tmp_path, network=True)
+    if offline is None:
+        pytest.skip("no sandbox on this machine")
+    assert " ".join(offline) != " ".join(online)
+    assert ("(deny network*)" in " ".join(offline)) or ("--unshare-net" in offline)
+    assert "(deny network*)" not in " ".join(online) and "--unshare-net" not in online

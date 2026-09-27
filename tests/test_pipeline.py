@@ -1,4 +1,4 @@
-"""The build pipeline (spec -> tests -> code) with a scripted fake Gemini. No network."""
+"""The build pipeline (spec -> test plan -> tests -> code) with a scripted fake Gemini. No network."""
 import contextlib
 import io
 import sys
@@ -15,8 +15,14 @@ from gemininonce.workspace import Workspace
 SPEC = ("# Spec\n\n## 3. Architecture\nOne module, add.py.\n\n## 4. Interface\n```python\n"
         "def add(a: int, b: int) -> int: ...\n```\n\n## 6. Requirements\n- R1: add(a, b) returns a + b. "
         "Acceptance: add(2, 3) == 5\n")
-TESTS = "from add import add\n\n\ndef test_r1_adds():\n    assert add(2, 3) == 5\n"
-VACUOUS = "def test_nothing():\n    assert True\n"
+PLAN = ("# Test plan\n\n## Approach\nNo external connections.\n\n## Unit tests (tests/unit/)\n"
+        "- R1: test_r1_adds: add(2, 3) == 5\n\n## End-to-end tests (tests/e2e/)\n"
+        "- R1: test_r1_e2e_adds: imported as a user would, add(2, 3) == 5\n")
+UNIT = "from add import add\n\n\ndef test_r1_adds():\n    assert add(2, 3) == 5\n"
+E2E = "from add import add\n\n\ndef test_r1_e2e_adds():\n    assert add(2, 3) == 5\n"
+TESTS = (("tests/unit/test_add.py", UNIT), ("tests/e2e/test_add_e2e.py", E2E))
+VACUOUS = (("tests/unit/test_add.py", "def test_r1_nothing():\n    assert True\n"),
+           ("tests/e2e/test_add_e2e.py", "def test_r1_e2e_nothing():\n    assert True\n"))
 CODE = "def add(a, b):\n    return a + b\n"
 
 
@@ -63,7 +69,8 @@ def build(tmp_path, monkeypatch):
         """replies: the writer's; reviews: the independent reviewer's (reviews are off unless asked for)."""
         args = build_parser().parse_args(["add numbers", "--dir", str(tmp_path), "--accept",
                                           "-t", f"{sys.executable} -m pytest -q -p no:cacheprovider",
-                                          "--spec-reviews", "0", "--tests-reviews", "0", *extra])
+                                          "--spec-reviews", "0", "--plan-reviews", "0", "--tests-reviews", "0",
+                                          "--tests-per-requirement", "1", *extra])
         ws = Workspace(tmp_path.resolve(), tmp_path / ".bak", sandbox=False, allow_new_files=True,
                        highlighter=Highlighter())
         chat = ScriptedChat(replies)
@@ -81,29 +88,32 @@ def run_quiet(fn):
 def test_idea_to_passing_code_with_locked_tests(build, tmp_path):
     b, chat, ws = build([
         reply(("SPEC.md", SPEC), ("add.py", "sneaky early code\n")),  # spec stage may only write SPEC.md
-        reply(("tests/test_add.py", TESTS)),
-        reply(("tests/test_add.py", "def test_r1_adds():\n    pass\n"), ("add.py", CODE)),  # can't touch tests
+        PLAN,
+        reply(*TESTS),
+        reply(("tests/unit/test_add.py", "def test_r1_adds():\n    pass\n"), ("add.py", CODE)),  # can't touch tests
     ])
     passed, printed = run_quiet(b.run)
     assert passed
-    assert (tmp_path / "SPEC.md").read_text() == SPEC
-    assert (tmp_path / "tests/test_add.py").read_text() == TESTS  # the implementer's rewrite was refused
+    assert (tmp_path / "SPEC.md").read_text() == SPEC and (tmp_path / "tests/TEST_PLAN.md").read_text() == PLAN
+    assert (tmp_path / "tests/unit/test_add.py").read_text() == UNIT  # the implementer's rewrite was refused
     assert (tmp_path / "add.py").read_text() == CODE
     assert "only SPEC.md may be written" in printed and "is locked" in printed
-    assert chat.new_chats == 2  # a fresh conversation for tests, and again for code
-    assert "IDEA: add numbers" in chat.sent[0] and SPEC in chat.sent[1]
-    assert "locked" in chat.sent[2] and "was not written" not in chat.sent[2]
-    assert "FILE: SPEC.md" in chat.sent[2] and SPEC.strip() in chat.sent[2]  # the implementer gets the spec
+    assert chat.new_chats == 3  # a fresh conversation for the plan, the tests, and the code
+    assert "IDEA: add numbers" in chat.sent[0]
+    assert SPEC in chat.sent[1] and "WHAT A GOOD TEST SUITE LOOKS LIKE" in chat.sent[1]  # the planner
+    assert SPEC in chat.sent[2] and PLAN in chat.sent[2] and "tests/e2e/" in chat.sent[2]  # the test writer
+    assert "FILE: SPEC.md" in chat.sent[3] and SPEC.strip() in chat.sent[3]  # the implementer gets the spec
 
 
 def test_tests_that_pass_without_code_are_sent_back(build, tmp_path):
     (tmp_path / "SPEC.md").write_text(SPEC)
-    b, chat, _ = build([reply(("tests/test_add.py", VACUOUS)), reply(("tests/test_add.py", TESTS)),
-                        reply(("add.py", CODE))], "--from", "tests")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests/TEST_PLAN.md").write_text(PLAN)
+    b, chat, _ = build([reply(*VACUOUS), reply(*TESTS), reply(("add.py", CODE))], "--from", "tests")
     passed, printed = run_quiet(b.run)
     assert passed
     assert "pass before anything is implemented" in chat.sent[1]
-    assert (tmp_path / "tests/test_add.py").read_text() == TESTS
+    assert (tmp_path / "tests/unit/test_add.py").read_text() == UNIT
 
 
 def test_thin_spec_is_sent_back_before_the_user_sees_it(build, tmp_path):
@@ -134,7 +144,7 @@ def test_user_settles_the_spec_by_talking_to_gemini(build, tmp_path, monkeypatch
     answers = iter(["", "integers only", "please also support floats", "/show", ""])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
     _, printed = run_quiet(b.write_spec)
-    assert "Before I write it" in printed and "no finished spec yet" in printed  # Enter before a spec exists
+    assert "Before I write it" in printed and "no finished specification yet" in printed  # Enter before a spec exists
     assert chat.sent[1].startswith("The user says:\nintegers only")
     assert chat.sent[2].startswith("The user says:\nplease also support floats")
     assert "changes to SPEC.md" in printed and "+- R2: add(a, b) accepts floats" in printed
@@ -142,10 +152,10 @@ def test_user_settles_the_spec_by_talking_to_gemini(build, tmp_path, monkeypatch
     assert (tmp_path / "SPEC.md").read_text() == updated and len(chat.sent) == 3
 
 
-def test_spec_uses_pro_and_stages_switch_back(build, tmp_path):
-    b, chat, _ = build([SPEC, reply(("tests/test_add.py", TESTS)), reply(("add.py", CODE))])
+def test_spec_and_plan_use_pro_and_later_stages_switch_back(build, tmp_path):
+    b, chat, _ = build([SPEC, PLAN, reply(*TESTS), reply(("add.py", CODE))])
     passed, _ = run_quiet(b.run)
-    assert passed and chat.models == ["pro", "flash", "flash"]  # spec on Pro; tests and code on the default
+    assert passed and chat.models == ["pro", "pro", "flash", "flash"]
 
 
 def test_spec_is_reviewed_by_a_fresh_session_that_sees_only_the_spec(build, tmp_path):
@@ -157,24 +167,27 @@ def test_spec_is_reviewed_by_a_fresh_session_that_sees_only_the_spec(build, tmp_
     assert len(reviewer.sent) == 2 and reviewer.new_chats == 1  # a fresh conversation for each review
     first_review = reviewer.sent[0]
     assert thinner.strip() in first_review and "IDEA" not in first_review  # only the spec, none of the conversation
-    assert chat.sent[1].startswith("An independent reviewer read ONLY the specification")
+    assert chat.sent[1].startswith("An independent reviewer read the specification")
     assert "R1 has no acceptance criteria" in chat.sent[1]
     assert (tmp_path / "SPEC.md").read_text() == SPEC and "Reviewer found no issues" in printed
     assert len(chat.sent) == 2  # "NO ISSUES" ends the reviewing
 
 
-def test_tests_are_reviewed_against_the_spec_by_a_fresh_session(build, tmp_path):
+def test_tests_are_reviewed_against_the_spec_and_plan_by_a_fresh_session(build, tmp_path):
     (tmp_path / "SPEC.md").write_text(SPEC)
-    sloppy = TESTS.replace("== 5", "== 5\n    assert add.__doc__ == 'Adds.'")
-    b, chat, _ = build([reply(("tests/test_add.py", sloppy)), reply(("tests/test_add.py", TESTS)),
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests/TEST_PLAN.md").write_text(PLAN)
+    sloppy = UNIT.replace("== 5", "== 5\n    assert add.__doc__ == 'Adds.'")
+    b, chat, _ = build([reply(("tests/unit/test_add.py", sloppy), TESTS[1]), reply(*TESTS),
                         reply(("add.py", CODE))], "--from", "tests", "--tests-reviews", "1",
                        reviews=["1. test_r1_adds checks add.__doc__, which the spec never promises."])
     passed, _ = run_quiet(b.run)
     assert passed
     review = b.reviewer.sent[0]
-    assert SPEC.strip() in review and "FILE: tests/test_add.py" in review and "__doc__" in review
+    assert SPEC.strip() in review and PLAN.strip() in review and "FILE: tests/unit/test_add.py" in review
+    assert "__doc__" in review and "e2e tests use no mocks" in review
     assert "An independent reviewer compared your tests" in chat.sent[1] and "never promises" in chat.sent[1]
-    assert (tmp_path / "tests/test_add.py").read_text() == TESTS
+    assert (tmp_path / "tests/unit/test_add.py").read_text() == UNIT
 
 
 def test_signed_out_keeps_flash_lite_and_explains(build, tmp_path):
@@ -213,3 +226,34 @@ def test_python_comments_in_the_interface_are_not_mistaken_for_headings():
     spec = ("# Spec\n\n## 3. Architecture\npkg/\n\n## 4. Interface\n\n```python\n# pkg/core.py\n\n"
             "class Solver:\n    def solve(self, n: int) -> list[int]: ...\n```\n\n## 6. Requirements\n- R1: works\n")
     assert spec_problems(spec) == []
+
+
+def test_thin_test_plan_is_sent_back_then_reviewed_by_a_fresh_session(build, tmp_path):
+    (tmp_path / "SPEC.md").write_text(SPEC)
+    thin = "# Test plan\n\n## Unit tests\n- check that add works\n"
+    b, chat, _ = build([thin, PLAN, PLAN], "--from", "plan", "--plan-reviews", "1",
+                       reviews=["1. No boundary cases for R1 (negative numbers, zero)."])
+    run_quiet(b.write_plan)
+    problems = chat.sent[1]
+    assert "End-to-end tests section" in problems and "No test cases for R1" in problems
+    assert "named test cases" in problems
+    review = b.reviewer.sent[0]
+    assert SPEC.strip() in review and PLAN.strip() in review and "WHAT A GOOD TEST SUITE" in review
+    assert chat.sent[2].startswith("An independent reviewer read the test plan") and "boundary" in chat.sent[2]
+    assert (tmp_path / "tests/TEST_PLAN.md").read_text() == PLAN
+
+
+def test_tests_need_unit_and_e2e_every_requirement_and_enough_cases(build, tmp_path):
+    (tmp_path / "SPEC.md").write_text(SPEC.replace("Acceptance: add(2, 3) == 5\n",
+                                                   "Acceptance: add(2, 3) == 5\n- R2: add(0, 0) == 0\n"))
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests/TEST_PLAN.md").write_text(PLAN)
+    only_unit = reply(("tests/unit/test_add.py", UNIT))
+    b, chat, _ = build([only_unit, reply(*TESTS)], "--from", "tests", "--tests-per-requirement", "2",
+                       "--patience", "1")
+    with pytest.raises(SystemExit, match="still had problems"):  # still not enough tests after one more try
+        run_quiet(b.write_tests)
+    problems = chat.sent[1]
+    assert "no tests in tests/e2e/" in problems
+    assert "No tests mention R2" in problems
+    assert "Only 1 test functions for 2 requirements" in problems

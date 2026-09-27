@@ -157,12 +157,16 @@ Decisions you made that the user didn't specify, so they can confirm or change t
 """
 
 
-SPEC_RULES = """\
-HOW TO REPLY: the specification is your reply itself, written as a normal Markdown answer (headings, lists,
-code blocks for signatures). Start it with its `# ` title heading and put nothing after it. Don't use a
-FILE: block and don't wrap it in a code block. To look at a project file first, reply with only
-`READ: <relative/path>` lines. To ask the user questions, reply with only the questions.
-"""
+def doc_rules(kind: str) -> str:
+    """How to reply when the reply itself is the document (a spec or a test plan)."""
+    return (f"HOW TO REPLY: the {kind} is your reply itself, written as a normal Markdown answer (headings, "
+            "lists, tables, code blocks). Start it with its `# ` title heading and put nothing after it. Don't use "
+            "a FILE: block and don't wrap it in a code block. To look at a project file first, reply with only "
+            "`READ: <relative/path>` lines. To ask the user questions, reply with only the questions.\n")
+
+
+SPEC_RULES = doc_rules("specification")
+PLAN_RULES = doc_rules("test plan")
 
 
 def headings(lines: list[str]) -> list[tuple[int, int, str]]:
@@ -178,16 +182,24 @@ def headings(lines: list[str]) -> list[tuple[int, int, str]]:
     return out
 
 
-def spec_document(markdown: str) -> str | None:
-    """The spec inside a reply: from its first heading (preferably the `# ` title) to the end, if the
-    reply looks like a spec at all (a heading plus requirements or an interface); else None."""
+def document(markdown: str, looks_like: str) -> str | None:
+    """The document inside a reply: from its first heading (preferably the `# ` title) to the end, if it
+    matches `looks_like` (a regex); else None (the reply is conversation, e.g. questions)."""
     lines = markdown.splitlines()
     found = headings(lines)
     starts = [i for i, level, _ in found if level == 1] or [i for i, _, _ in found]
     if not starts:
         return None
     doc = "\n".join(lines[starts[0]:]).strip() + "\n"
-    return doc if re.search(r"requirement|interface|^\W*R1\b", doc, re.I | re.M) else None
+    return doc if re.search(looks_like, doc, re.I | re.M) else None
+
+
+def spec_document(markdown: str) -> str | None:
+    return document(markdown, r"requirement|interface|^\W*R1\b")
+
+
+def plan_document(markdown: str) -> str | None:
+    return document(markdown, r"unit|e2e|end-to-end|test_")
 
 
 def blocks_markdown(blocks: list[dict]) -> str:
@@ -247,33 +259,25 @@ def spec_review_prompt(spec: str, spec_path: str) -> str:
     ])
 
 
-def spec_review_feedback_prompt(issues: str) -> str:
-    """The fresh reviewer's findings, for the spec writer."""
+def tests_review_prompt(spec: str, spec_path: str, plan: str, plan_path: str, tests: dict[str, str],
+                        test_cmd: str, tests_dir: str) -> str:
+    """For a fresh reviewer session that sees only the spec, the test plan and the tests."""
     return "\n\n".join([
-        "An independent reviewer read ONLY the specification, as the test writer will, and raised these "
-        f"points:\n\n{issues}",
-        "Revise the specification to resolve them. If you disagree with a point, leave it and say why in "
-        "section 10. Reply with the complete updated specification, starting with its `# ` title heading.",
-        SPEC_RULES,
-    ])
-
-
-def tests_review_prompt(spec: str, spec_path: str, tests: dict[str, str], test_cmd: str) -> str:
-    """For a fresh reviewer session that sees only the spec and the tests."""
-    return "\n\n".join([
-        "You are reviewing TESTS written from a specification, before any implementation exists. The tests "
-        f"run as `{test_cmd}` and are meant to fail until the code is written.",
+        "You are reviewing TESTS written from a specification and a test plan, before any implementation exists. "
+        f"They run as `{test_cmd}` and are meant to fail until the code is written.",
+        guide(tests_dir),
         "Check that:\n"
-        "- every numbered requirement, acceptance criterion, example, error and edge case in the spec is tested;\n"
+        "- every test case in the plan exists, and every requirement, example, error and boundary in the spec is "
+        "tested (list what's missing by name);\n"
         "- names, signatures, types and exceptions match the spec's Interface exactly;\n"
         "- expected values are actually correct;\n"
-        "- the tests don't demand things the spec doesn't promise (exact error messages, ordering, internal "
-        "helpers, private attributes, particular algorithms);\n"
-        "- tests are independent and deterministic, and would fail only for a missing or wrong implementation, "
-        "not because of mistakes in the tests themselves.",
+        "- unit tests mock every external connection and test its failures; e2e tests use no mocks;\n"
+        "- the tests don't demand things the spec doesn't promise;\n"
+        "- tests are independent and deterministic, and would fail only for a missing or wrong implementation.",
         f"{spec_path}:\n{fenced(spec, 'markdown')}",
+        f"{plan_path}:\n{fenced(plan, 'markdown')}",
         "TESTS:\n\n" + "\n\n".join(f"FILE: {rel}\n{fenced(text)}" for rel, text in tests.items()),
-        REVIEW_FORMAT + " Name the test (or the missing requirement) in each issue.",
+        REVIEW_FORMAT + " Name the test (or the missing case) in each issue.",
     ])
 
 
@@ -292,33 +296,131 @@ def reviewer_found_nothing(reply: str) -> bool:
     return NO_ISSUES in reply.upper() and len(reply.strip()) < 200
 
 
-def discussion_prompt(what: str, paths: list[str], user_text: str, document: bool = False) -> str:
-    """The user's reply while reviewing a stage's files. document: the stage's file is the reply itself
-    (the spec), not FILE: blocks."""
+def discussion_prompt(what: str, paths: list[str], user_text: str, document: str | None = None) -> str:
+    """The user's reply while reviewing a stage's files. document: the kind of document ("specification",
+    "test plan") when the stage's file is the reply itself rather than FILE: blocks."""
     files = ", ".join(paths) or f"the {what}"
-    how = (f"reply with the complete updated {what}, starting with its `# ` title heading" if document else
+    how = (f"reply with the complete updated {document}, starting with its `# ` title heading" if document else
            f"send the complete updated {files} with FILE: blocks (the whole file, not just the changes)")
     return "\n\n".join([
         f"The user says:\n{user_text}",
         f"Answer any questions briefly and ask your own if something is still unclear. If this changes the "
         f"{what}, {how}.",
-        SPEC_RULES if document else RULES,
+        doc_rules(document) if document else RULES,
     ])
 
 
-def tests_prompt(spec: str, spec_path: str, test_cmd: str, tests_dir: str, files: dict[str, str],
-                 layout: str) -> str:
+TESTING_GUIDE = """\
+WHAT A GOOD TEST SUITE LOOKS LIKE
+- MANY small, focused tests. More is better. For every requirement, test the normal case, every acceptance
+  criterion, the boundaries (smallest, largest, just outside), every error case, and edge cases (empty, one
+  item, many, unusual but valid input). Use every example in the spec verbatim. Use parametrized tables
+  (e.g. pytest.mark.parametrize) to cover many inputs cheaply.
+- Check properties, not only examples: invariants that must always hold (round trips, a returned solution
+  actually satisfies the rules, sizes and ordering guarantees), checked across ranges of inputs.
+- Test behavior through the public interface in the spec, not private helpers or internal state. Assert
+  everything the spec promises, and nothing it doesn't (exact messages, ordering or algorithms it leaves open).
+- Precise assertions: exact values where the spec defines them, the exact exception type, the whole
+  output structure.
+- Independent and deterministic: no shared state or order dependence between tests; seed randomness;
+  control time.
+- Name each test after its requirement and behavior (test_r3_rejects_empty_input), with a one-line docstring.
+
+TWO KINDS OF TESTS, IN TWO FOLDERS
+- {tests_dir}/unit/: fast, isolated tests of each component. Mock every external connection (network/HTTP,
+  databases, other services, subprocesses, the clock) at the boundary. Test how the code talks to them (called
+  with the right arguments) and how it handles their failures (errors, timeouts, bad data).
+- {tests_dir}/e2e/: the whole system through its real entry points (public API, CLI) with NO mocks. If it
+  uses real services or the network, call them for real: network access is available. Check observable
+  outcomes; where real data varies, check its shape and invariants rather than exact values. Skip only when a
+  required credential is truly missing, and say why.
+"""
+
+TEST_PLAN_TEMPLATE = """\
+# Test plan
+
+## Approach
+What's unit-tested and what's end-to-end; what unit tests mock and how; which real services or network the
+e2e tests use; shared fixtures and test data.
+
+## Unit tests ({tests_dir}/unit/)
+For each requirement (R1, R2, ...): a list of test cases, each with its test name, what it checks
+(input -> expected result or exception) and what's mocked.
+
+## End-to-end tests ({tests_dir}/e2e/)
+Scenarios through the real entry points, without mocks, and what each one asserts.
+
+## Coverage
+A table: requirement -> test names. Every requirement gets at least {per_requirement} tests, including its
+errors and boundaries.
+
+## Not tested
+Anything deliberately left out, and why.
+"""
+
+
+def guide(tests_dir: str) -> str:
+    return TESTING_GUIDE.format(tests_dir=tests_dir)
+
+
+def plan_prompt(spec: str, spec_path: str, test_cmd: str, tests_dir: str, per_requirement: int,
+                files: dict[str, str], layout: str, may_ask: bool = True) -> str:
     return "\n\n".join(filter(None, [
-        "You are writing TESTS for code that does not exist yet (test-first). The specification below "
-        "was agreed with the user and is the only source of truth.",
-        f"- Tests run exactly as `{test_cmd}` from the project root. Put every test file under `{tests_dir}/`.\n"
-        "- Use the names, signatures, types and exceptions exactly as the spec's Interface section gives them.\n"
-        "- Cover every numbered requirement's acceptance criteria, every example, every error and edge case, "
-        "and any measurable non-functional requirement. Write one focused test per behavior, named after it "
-        "(e.g. test_r3_rejects_empty_input).\n"
-        "- Do NOT write the implementation, stubs, or mocks of the code under test: these tests must "
-        "fail until the implementation exists.",
+        "You are a test engineer planning the TEST SUITE for software that doesn't exist yet (test-first). The "
+        "specification below was agreed with the user. Plan first: the plan is reviewed, then the tests are "
+        "written from it, then an implementer makes them pass.",
+        guide(tests_dir),
+        f"Tests will run exactly as `{test_cmd}` from the project root.",
+        f"Follow this template, keep every section, and be thorough: list every test case by name.\n"
+        f"{fenced(TEST_PLAN_TEMPLATE.format(tests_dir=tests_dir, per_requirement=per_requirement), 'markdown')}",
         f"{spec_path}:\n{fenced(spec, 'markdown')}",
+        ("If something in the spec makes the tests impossible to plan, you may first ask the user short numbered "
+         "questions, in a reply with only the questions." if may_ask else
+         "Don't ask questions: make reasonable decisions and note them in the plan."),
+        *_context(files, layout),
+        PLAN_RULES,
+    ]))
+
+
+def plan_review_prompt(spec: str, spec_path: str, plan: str, per_requirement: int, tests_dir: str) -> str:
+    """For a fresh reviewer session that sees only the spec and the test plan."""
+    return "\n\n".join([
+        "You are reviewing a TEST PLAN against its specification, before any tests or code are written.",
+        guide(tests_dir),
+        "Look for: requirements, acceptance criteria, examples, errors or boundaries with no test case; fewer than "
+        f"{per_requirement} test cases for a requirement; expected results that are wrong or vague; unit tests "
+        "that would touch real external services instead of mocks; e2e tests that use mocks; missing failure "
+        "handling (errors, timeouts, bad data) for external connections; tests of things the spec doesn't promise.",
+        f"{spec_path}:\n{fenced(spec, 'markdown')}",
+        f"TEST PLAN:\n{fenced(plan, 'markdown')}",
+        REVIEW_FORMAT,
+    ])
+
+
+def doc_review_feedback_prompt(kind: str, issues: str) -> str:
+    """A fresh reviewer's findings, for the writer of a document (spec or test plan)."""
+    return "\n\n".join([
+        f"An independent reviewer read the {kind} (with only what it needed) and raised these points:\n\n{issues}",
+        f"Revise the {kind} to resolve them. If you disagree with a point, leave it and say why. Reply with the "
+        f"complete updated {kind}, starting with its `# ` title heading.",
+        doc_rules(kind),
+    ])
+
+
+def tests_prompt(spec: str, spec_path: str, plan: str, plan_path: str, test_cmd: str, tests_dir: str,
+                 files: dict[str, str], layout: str) -> str:
+    return "\n\n".join(filter(None, [
+        "You are writing TESTS for code that does not exist yet (test-first), implementing the agreed test plan "
+        "for the agreed specification. Both are below.",
+        guide(tests_dir),
+        f"- Tests run exactly as `{test_cmd}` from the project root. Put unit tests under `{tests_dir}/unit/` "
+        f"and end-to-end tests under `{tests_dir}/e2e/`.\n"
+        "- Write EVERY test case in the plan (add more if you see gaps; never fewer).\n"
+        "- Use the names, signatures, types and exceptions exactly as the spec's Interface section gives them.\n"
+        "- Do NOT write the implementation or stubs of the code under test (mocking EXTERNAL connections in unit "
+        "tests is expected): these tests must fail until the implementation exists.",
+        f"{spec_path}:\n{fenced(spec, 'markdown')}",
+        f"{plan_path}:\n{fenced(plan, 'markdown')}",
         *_context(files, layout),
         RULES,
     ]))
@@ -334,12 +436,12 @@ def tests_problems_prompt(problems: list[str], notes, test_out: str) -> str:
     ]))
 
 
-def spec_problems_prompt(problems: list[str], notes, spec_path: str) -> str:
+def doc_problems_prompt(kind: str, problems: list[str], notes) -> str:
     return "\n\n".join(filter(None, [
-        f"The specification isn't complete yet:\n" + "\n".join(f"- {p}" for p in problems),
+        f"The {kind} isn't complete yet:\n" + "\n".join(f"- {p}" for p in problems),
         *notes,
-        "Reply with the complete updated specification, starting with its `# ` title heading.",
-        SPEC_RULES,
+        f"Reply with the complete updated {kind}, starting with its `# ` title heading.",
+        doc_rules(kind),
     ]))
 
 
@@ -348,5 +450,6 @@ def implement_message(spec_path: str, tests_dir: str, test_cmd: str) -> str:
             f"`{test_cmd}` from the project root. {spec_path} and the tests in {tests_dir}/ were agreed with the "
             f"user and are locked: don't change them. If the tests can't import the code when run that way, "
             f"that's yours to fix: lay out the code accordingly or add configuration at the project root (for "
-            f"example a conftest.py or pyproject.toml). If a test looks wrong, say so in your reply instead of "
-            f"working around it.")
+            f"example a conftest.py or pyproject.toml). The unit tests mock external connections; the e2e tests "
+            f"call real services, and network access is available. If a test looks wrong, say so in your reply "
+            f"instead of working around it.")

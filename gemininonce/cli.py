@@ -48,6 +48,9 @@ def add_session_options(ap: argparse.ArgumentParser) -> None:
                          "'list' shows them")
     ap.add_argument("--no-sandbox", action="store_true",
                     help="run the test command unsandboxed (allows network and writes outside the project)")
+    ap.add_argument("--network", action=argparse.BooleanOptionalAction, default=None,
+                    help="let the sandboxed test command use the internet (default: on for `build`, whose "
+                         "e2e tests hit real services; off otherwise)")
     ap.add_argument("--model", default=os.environ.get("GEMININONCE_MODEL"),
                     help="Gemini model to force: flash, pro, flash-lite, ...; 'any' leaves it alone "
                          "(default: flash, or flash-lite with --anonymous)")
@@ -141,7 +144,7 @@ def main() -> int:
     HOME.mkdir(parents=True, exist_ok=True)
     backup_dir = HOME / "backups" / time.strftime("%Y%m%d-%H%M%S")
     ws = Workspace(root, backup_dir, args.timeout, sandbox=not args.no_sandbox,
-                   allow_new_files=args.allow_new_files)
+                   allow_new_files=args.allow_new_files, network=bool(args.network))
 
     files = ws.collect(args.paths)
     if not files:
