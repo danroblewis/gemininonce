@@ -12,6 +12,7 @@ from .transcript import Transcript
 from .workspace import Workspace
 
 MAX_READS_PER_ROUND = 5  # replies that only ask for files, answered before we count it as "no code"
+MORE_ROUNDS = 5  # rounds added when the user says to keep going
 
 
 def signature(out: str) -> str:
@@ -91,10 +92,13 @@ class FixLoop:
         self.unanswered_reads = []
         return [s for s in [protocol.requested_files(files)] if s] + notes
 
-    def ask_user_for_help(self, reason: str, rounds: int, code: int | None, out: str | None) -> str | None:
-        """Gemini is stuck: show where things stand and let the user steer. Returns the next message for
-        Gemini, or None to stop. Without a terminal (scripts, CI) this just stops."""
-        print(paint(f"\n✋ Gemini seems stuck: {reason}.", YELLOW, BOLD))
+    def ask_user_for_help(self, reason: str, rounds: int, code: int | None, out: str | None,
+                          next_prompt: str) -> tuple[str, int, bool] | None:
+        """Gemini is stuck (or used up its rounds): show where things stand and let the user steer.
+        Returns (next message for Gemini, rounds to add, whether to hold off asking again for those rounds),
+        or None to stop. `next_prompt` is what would
+        be sent if the user just lets it keep going. Without a terminal (scripts, CI) this just stops."""
+        print(paint(f"\n✋ {reason}.", YELLOW, BOLD))
         if not sys.stdin.isatty():
             return None
         print(f"   Rounds so far: {rounds}; files changed: {', '.join(self.ws.written) or 'none'}")
@@ -104,23 +108,49 @@ class FixLoop:
         if self.last_prose.strip():
             print("   Gemini's last message:")
             print("\n".join(paint("     " + ln, DIM) for ln in self.last_prose.strip().splitlines()[:4]))
-        answer = ask_user(paint("   Type a hint for Gemini, /new for a fresh conversation with the current files, "
-                                "or press Enter to stop:\n   > ", YELLOW)).strip()
-        if not answer:
-            return None
-        if answer == "/new":
-            print(paint("   Starting a fresh conversation...", DIM))
-            self.chat.new_chat()
-            test_out = protocol.test_result(self.test, code, out) if self.test and out else ""
-            return protocol.initial_prompt(self.message, test_out, self.ws.current_files(), self.ws.layout())
-        return protocol.hint_prompt(answer, self.test, code, out)
+        print(paint("   What next?\n"
+                    "     type a message   sent to Gemini as a hint, then it keeps going\n"
+                    f"     /more [N]        keep going as is for N more rounds (default {MORE_ROUNDS})\n"
+                    "     /new             fresh Gemini conversation: it forgets this chat and starts over with\n"
+                    "                      the current files and test output (helps when it's going in circles)\n"
+                    "     Enter or /quit   stop here", YELLOW))
+        while True:
+            answer = ask_user(paint("   > ", YELLOW)).strip()
+            if answer in ("", "/quit"):
+                return None
+            if answer.startswith("/more"):
+                n = answer[len("/more"):].strip()
+                if n and not n.isdigit():
+                    print(paint("   /more takes a number of rounds, e.g. /more 10", YELLOW))
+                    continue
+                return next_prompt, int(n or MORE_ROUNDS), True
+            if answer == "/new":
+                print(paint("   Starting a fresh conversation...", DIM))
+                self.chat.new_chat()
+                test_out = protocol.test_result(self.test, code, out) if self.test and out else ""
+                return protocol.initial_prompt(self.message, test_out, self.ws.current_files(),
+                                               self.ws.layout()), MORE_ROUNDS, False
+            if answer.startswith("/"):
+                print(paint(f"   Unknown command {answer.split()[0]}; see the choices above.", YELLOW))
+                continue
+            return protocol.hint_prompt(answer, self.test, code, out), MORE_ROUNDS, False
 
     def run(self, prompt: str, first: tuple[int, str] | None = None) -> bool:
         """first: (exit code, output) of the test run before round 1. Returns True if the test passed."""
         code, out = first or (None, None)
         seen = {signature(out)} if out else set()
-        stalled = 0
-        for i in range(1, self.max_iters + 1):
+        stalled, i, limit = 0, 0, self.max_iters
+        ask_after = 0  # after "/more N", don't interrupt again before round i + N
+        while True:
+            if i >= limit:  # out of rounds: ask (at a terminal) whether to keep going
+                choice = self.ask_user_for_help(f"Used all {limit} rounds (-n) without the tests passing",
+                                                i, code, out, prompt)
+                if choice is None:
+                    print(paint(f"\n✘ Gave up after {i} rounds.", RED, BOLD))
+                    return False
+                prompt, more, hold = choice
+                limit, stalled, ask_after = i + more, 0, i + more if hold else 0
+            i += 1
             print(paint(f"\n━━━ Round {i} " + "━" * 50, BLUE, BOLD))
             round_start = len(self.chat.usage.turns)
             edits, commands, _ = self.ask_for_code(prompt)
@@ -131,11 +161,15 @@ class FixLoop:
             results = self.ws.review_commands(commands, self.test)
             notes += self._requested_files_notes()
 
+            if not edits and not commands and i < ask_after:
+                continue  # the user said to keep going; resend the same message
             if not edits and not commands:
-                prompt = self.ask_user_for_help("its replies had no file changes", i, code, out)
-                if prompt is None:
+                choice = self.ask_user_for_help("Gemini seems stuck: its replies had no file changes", i, code, out,
+                                                prompt)
+                if choice is None:
                     return False
-                stalled = 0
+                prompt, more, hold = choice
+                limit, stalled, ask_after = max(limit, i + more), 0, i + more if hold else 0
                 continue
 
             if not self.test:
@@ -152,13 +186,12 @@ class FixLoop:
             sig = signature(out)
             stalled = stalled + 1 if sig in seen else 0  # same failure again, or back to an earlier one
             seen.add(sig)
-            if stalled >= self.patience:
-                prompt = self.ask_user_for_help(f"no progress for {stalled} rounds (the same test failures)",
-                                                i, code, out)
-                if prompt is None:
-                    return False
-                stalled = 0
-                continue
             prompt = protocol.failure_prompt(self.test, code, out, notes, results, bool(stalled))
-        print(paint(f"\n✘ Gave up after {self.max_iters} rounds.", RED, BOLD))
-        return False
+            if stalled >= self.patience and i >= ask_after:
+                choice = self.ask_user_for_help(
+                    f"Gemini seems stuck: no progress for {stalled} rounds (the same test failures)",
+                    i, code, out, prompt)
+                if choice is None:
+                    return False
+                prompt, more, hold = choice
+                limit, stalled, ask_after = max(limit, i + more), 0, i + more if hold else 0

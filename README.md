@@ -45,7 +45,8 @@ in to Gemini once.
   itself is free or flat-rate.
 - **Approvals:** a prompt to approve, modify or skip any shell command Gemini suggests, and a `y/N`
   before it creates new files or reads files you didn't give it.
-- **When Gemini is stuck:** a prompt to send it a hint, start a fresh conversation (`/new`), or stop.
+- **When Gemini is stuck or out of rounds:** you choose: send a hint, `/more N` rounds, `/new` (a
+  fresh conversation that starts over from the current files), or stop.
 
 The test command runs in a sandbox, risky code is flagged before it's written, and secrets are never
 sent. Still, review the result with `git diff`.

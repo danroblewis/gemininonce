@@ -22,17 +22,33 @@ gemininonce lib/ -m "add a --verbose flag"      # no test: you review and send f
 It stops when the test passes (exit code 0), or exits 1 when it reaches the `-n` round cap
 (default 20).
 
-## When Gemini is stuck
+## When Gemini is stuck, or out of rounds
 
-**When Gemini is stuck,** the tool asks you for help instead of just giving up. Gemini counts as
-stuck after `--patience` rounds (default 3) in a row where the test keeps failing the same way, or
-flips back to a failure it already had, or when its replies have no changes even after retries. It
-shows the rounds so far, the files changed, the end of the last test output and Gemini's last
-message. Then you can:
-- **type a hint**, which goes to Gemini along with the current test output, and the loop continues
-- enter **`/new`** to start a fresh conversation with the current files. That helps when a long
-  chat has gone off track, and it resets the conversation history the cost estimate counts.
-- **press Enter** to stop (exit 1)
+Instead of just giving up, the tool stops and asks you. That happens in two cases:
+- **No progress:** `--patience` rounds (default 3) in a row where the test keeps failing the same
+  way or goes back to a failure it already had, or replies with no changes even after retries.
+- **Out of rounds:** the `-n` round limit (default 20) is used up.
+
+It shows the rounds so far, the files changed, the end of the last test output and Gemini's last
+message, then:
+
+```
+  What next?
+    type a message   sent to Gemini as a hint, then it keeps going
+    /more [N]        keep going as is for N more rounds (default 5)
+    /new             fresh Gemini conversation: it forgets this chat and starts over with the
+                     current files and test output (helps when it's going in circles)
+    Enter or /quit   stop here
+```
+
+- **`/more N`** means "don't ask me again for N rounds". It sends exactly what would have been sent
+  anyway, and raises the round limit if needed.
+- **A hint or `/new`** also adds rounds if you're at the limit, but you're asked again as soon as it
+  gets stuck.
+- **`/new` restarts the conversation.** Gemini loses the whole conversation (its earlier attempts,
+  your hints) and gets the current state of the files, which includes its own changes so far. Long
+  chats tend to go in circles, and a fresh one is also cheaper, because each message no longer
+  re-sends the long history.
 
 Without a terminal (scripts, `until` loops), it stops with exit code 1 instead of asking.
 

@@ -270,7 +270,7 @@ def test_stuck_user_hint_is_sent_and_new_starts_fresh(todo_project, tmp_path, mo
     assert chat.new_chats == 1
     fresh = chat.sent[chat.sent.index(hint) + 2]  # two more stalled rounds later, /new re-sends the project
     assert "PROJECT FILES:" in fresh and "PROJECT LAYOUT" in fresh and "# no real change" in fresh
-    assert printed.count("Gemini seems stuck") == 2
+    assert printed.count("Gemini seems stuck") == 3  # a hint or /new also grants more rounds
 
 
 def test_gemini_timeout_is_retried_not_fatal(no_input):
@@ -311,3 +311,38 @@ def test_code_block_inside_a_list_item_stays_a_code_block(page):
         </div></message-content>""")
     md = page.locator("message-content").first.evaluate(EXTRACT_MD_JS)
     assert md == "- **Layout**:\n   ```plaintext\n   pkg/\n   └── core.py\n   ```\n- Next\n"
+
+
+def stuck_menu(monkeypatch, *answers):
+    monkeypatch.setattr(loop_module.time, "sleep", lambda s: None)
+    replies = iter(answers)
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(replies))
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+
+
+def test_more_keeps_going_for_n_rounds(todo_project, tmp_path, monkeypatch):
+    stuck_menu(monkeypatch, "/more 2", "")
+    loop, chat, files = stuck_loop(todo_project, tmp_path, [STUCK] * 6, patience=2)
+    loop.max_iters = 20
+    passed, printed = quiet(loop.run, protocol.initial_prompt("", "", files), None)
+    assert not passed and len(chat.sent) == 5  # stuck at round 3, /more 2 -> rounds 4-5 uninterrupted, stop
+    assert "Rounds so far: 3" in printed and "Rounds so far: 5" in printed and "Rounds so far: 4" not in printed
+    assert "/more [N]" in printed and "fresh Gemini conversation: it forgets this chat" in printed
+    assert "That did not change the failure" in chat.sent[2]  # /more sends what it would have sent anyway
+
+
+def test_round_limit_asks_at_a_terminal_and_more_extends_it(todo_project, tmp_path, monkeypatch):
+    stuck_menu(monkeypatch, "/bogus", "/more 1", "")
+    loop, chat, files = stuck_loop(todo_project, tmp_path, [STUCK] * 4, patience=99)
+    loop.max_iters = 2
+    passed, printed = quiet(loop.run, protocol.initial_prompt("", "", files), None)
+    assert not passed and len(chat.sent) == 3  # 2 rounds, /more 1 -> 1 round, asked again -> stop
+    assert printed.count("Used all") == 2 and "Unknown command /bogus" in printed
+    assert "Gave up after 3 rounds" in printed
+
+
+def test_round_limit_without_a_terminal_just_stops(todo_project, no_input, tmp_path):
+    loop, chat, files = stuck_loop(todo_project, tmp_path, [STUCK] * 4, patience=99)
+    loop.max_iters = 2
+    passed, printed = quiet(loop.run, protocol.initial_prompt("", "", files), None)
+    assert not passed and len(chat.sent) == 2 and "Gave up after 2 rounds" in printed
