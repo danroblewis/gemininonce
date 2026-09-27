@@ -6,6 +6,17 @@ geminonce app.py -t "npm test" -m "the date parser breaks on ISO week dates"
 geminonce lib/ -m "add a --verbose flag"      # no test: you review and send follow-ups
 ```
 
+## Starting a new project in an empty folder
+
+```sh
+mkdir myapi && cd myapi
+geminonce . -m "set up a basic FastAPI project ..." --check "GET /health returns {\"status\": \"ok\"}"
+```
+
+If every path you give is a directory with no files in it yet, Gemini is told the project is empty and to
+create the files it needs. New files are then allowed without asking for each one. For a bigger project where
+you want a spec, a test plan and tests first, use [`geminonce build`](build.md).
+
 ## No test command yet? `--check`
 
 ```sh

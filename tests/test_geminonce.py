@@ -212,3 +212,29 @@ def test_flagged_lines_are_shown_in_context_and_v_shows_the_file(ws, monkeypatch
     assert "a.py, lines 2-6:" in out and ">    6" in out and "d = os.getcwd()" in out  # where d comes from
     assert out.count("def clean():") == 2  # once in the context, once more for "v"
     assert "rejected by a safety check" in notes[0]
+
+
+def test_empty_directory_is_a_new_project(tmp_path, monkeypatch, capsys):
+    """`geminonce . -m ...` in an empty folder: no 'No readable files' exit, new files allowed, and Gemini
+    is told the project is empty."""
+    from geminonce import cli, protocol
+    seen = {}
+
+    def fake_open_chat(args, profile_dir):
+        raise SystemExit("stop before the browser")
+
+    monkeypatch.setattr(cli, "open_chat", fake_open_chat)
+    monkeypatch.setattr(sys, "argv", ["geminonce", str(tmp_path), "-m", "set up a FastAPI project"])
+    with pytest.raises(SystemExit, match="stop before the browser"):
+        cli.main()
+    assert "Empty project: Gemini will create the files" in capsys.readouterr().out
+    prompt = protocol.initial_prompt("set up a FastAPI project", "", {}, "")
+    assert "The project directory is empty: create every file it needs" in prompt and "PROJECT FILES" not in prompt
+
+
+def test_a_missing_or_unreadable_file_still_stops(tmp_path, monkeypatch):
+    from geminonce import cli
+    (tmp_path / "blob.bin").write_bytes(b"\0\1\2")
+    monkeypatch.setattr(sys, "argv", ["geminonce", str(tmp_path / "blob.bin"), "--root", str(tmp_path), "-m", "x"])
+    with pytest.raises(SystemExit, match="No readable files"):
+        cli.main()

@@ -152,10 +152,15 @@ def main() -> int:
 
     files = ws.collect(args.paths)
     if not files:
-        sys.exit("No readable files to send.")
+        if not all(Path(p).is_dir() for p in args.paths):
+            sys.exit("No readable files to send.")
+        # Only (empty) directories: a new project. Creating files is the point, so don't ask for each one.
+        ws.allow_new_files = True
+        print(paint("Empty project: Gemini will create the files (new files are allowed without asking).", DIM))
     ws.hl = Highlighter.for_files(files)
     size = sum(map(len, files.values()))
-    print(f"Sending {len(files)} file(s), {size:,} chars.")
+    if files:
+        print(f"Sending {len(files)} file(s), {size:,} chars.")
     if size > 400_000 and ask_user("That's a lot for a chat message. Continue? [y/N] ").lower() != "y":
         return 1
     if args.anonymous and not confirm_anonymous(args, files):

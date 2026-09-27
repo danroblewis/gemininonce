@@ -88,7 +88,8 @@ def initial_prompt(message: str, test_out: str, files: dict[str, str], layout: s
         f"TASK: {message}" if message else "TASK: make the test command pass.",
         test_out,
         layout,
-        "PROJECT FILES:\n\n" + "\n\n".join(f"FILE: {rel}\n{fenced(text)}" for rel, text in files.items()),
+        "PROJECT FILES:\n\n" + "\n\n".join(f"FILE: {rel}\n{fenced(text)}" for rel, text in files.items()) if files
+        else "The project directory is empty: create every file it needs, each with a FILE: block.",
         RULES,
     ]))
 
