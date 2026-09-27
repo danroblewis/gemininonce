@@ -41,7 +41,9 @@ def add_session_options(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--retries", type=int, default=3, help="re-asks when Gemini replies without code")
     ap.add_argument("--patience", type=int, default=3, help="stop after N rounds with unchanged test output")
     ap.add_argument("--timeout", type=int, default=300, help="timeout for test/commands (seconds)")
-    ap.add_argument("--profile", default=str(HOME / "profile"), help="browser profile dir (keeps login)")
+    ap.add_argument("--profile", nargs="?", const=str(HOME / "profile"), metavar="DIR",
+                    help="sign in with geminonce's own browser profile, where you log in once and it's remembered "
+                         f"(default dir: {HOME / 'profile'})")
     ap.add_argument("--account", default=env("ACCOUNT"),
                     help="refuse to send unless the Gemini account contains this, e.g. @corp.com")
     ap.add_argument("--chrome-profile", default=env("CHROME_PROFILE"),
@@ -56,9 +58,9 @@ def add_session_options(ap: argparse.ArgumentParser) -> None:
                     help="Gemini model to force: flash, pro, flash-lite, ...; 'any' leaves it alone "
                          "(default: flash, or flash-lite with --anonymous)")
     ap.add_argument("--anonymous", action="store_true",
-                    help="use signed-out Gemini (free tier) in a throwaway profile: no account, no copied "
-                         "Chrome data; conversations should be treated as public")
-    ap.add_argument("-y", "--yes", action="store_true", help="skip the --anonymous confirmation")
+                    help="signed-out Gemini (free tier) in a throwaway profile; treat what's sent as public. This is "
+                         "the default unless --chrome-profile, --account, --profile or --cdp is given")
+    ap.add_argument("-y", "--yes", action="store_true", help="skip the one-time anonymous-mode confirmation")
     ap.add_argument("--show", action="store_true", help="show the browser window (hidden by default)")
     ap.add_argument("-v", "--verbose", action="store_true", help="print full code and outputs in the transcript")
     ap.add_argument("--cdp", help="attach to an already-running Chrome, e.g. http://127.0.0.1:9222")
@@ -87,16 +89,35 @@ def warn_unknown_env_vars() -> None:
             print(f"warning: unknown environment variable {var} (did you mean GEMINONCE_ACCOUNT?)")
 
 
+ANONYMOUS_OK = HOME / "anonymous-ok"  # created once the user has confirmed anonymous mode
+
+
+def choose_session(args) -> None:
+    """Anonymous (signed-out, free tier) unless an account is asked for in some way: --chrome-profile or
+    --account (or their environment variables), --profile, or --cdp."""
+    if args.anonymous:
+        explicit = [f for f in ("--chrome-profile", "--account", "--cdp", "--profile")
+                    if any(a == f or a.startswith(f + "=") for a in sys.argv[1:])]
+        if explicit:
+            sys.exit(f"--anonymous can't be combined with {', '.join(explicit)}")
+        for var in ("GEMINONCE_CHROME_PROFILE", "GEMINONCE_ACCOUNT", "GEMININONCE_CHROME_PROFILE",
+                    "GEMININONCE_ACCOUNT"):
+            if os.environ.get(var):
+                print(paint(f"--anonymous: ignoring {var}", DIM))
+        args.chrome_profile = args.account = None
+    elif not (args.chrome_profile or args.account or args.profile or args.cdp):
+        args.anonymous = True
+    if not args.anonymous and not args.profile:
+        args.profile = str(HOME / ("chrome" if args.chrome_profile else "profile"))
+
+
 def confirm_anonymous(args, files: dict[str, str]) -> bool:
-    """Enforce --anonymous's restrictions and get the user's OK; False means abort."""
-    explicit = [f for f in ("--chrome-profile", "--account", "--cdp", "--profile")
-                if any(a == f or a.startswith(f + "=") for a in sys.argv[1:])]
-    if explicit:
-        sys.exit(f"--anonymous can't be combined with {', '.join(explicit)}")
-    for var in ("GEMINONCE_CHROME_PROFILE", "GEMINONCE_ACCOUNT", "GEMININONCE_CHROME_PROFILE", "GEMININONCE_ACCOUNT"):
-        if os.environ.get(var):
-            print(paint(f"--anonymous: ignoring {var}", DIM))
-    args.chrome_profile = args.account = None
+    """Anonymous mode: the full warning and a typed 'yes' the first time (remembered), a one-line notice
+    after that. False means abort."""
+    if ANONYMOUS_OK.exists():
+        print(paint("Signed-out Gemini (free tier): treat what's sent as public. To use your account: "
+                    "--chrome-profile NAME (see --chrome-profile list x), or --profile.", YELLOW))
+        return True
     print(paint("\n⚠  ANONYMOUS MODE: signed-out Gemini, free tier", YELLOW, BOLD))
     print(paint("   Fresh throwaway browser profile: no Google account, no cookies, nothing copied\n"
                 "   from Chrome; deleted afterwards. Free-tier chats may be kept by Google, used to\n"
@@ -105,9 +126,18 @@ def confirm_anonymous(args, files: dict[str, str]) -> bool:
                 f"   {len(files)} file(s) (Gemini may ask for others; you'll be asked before any is sent):",
                 YELLOW))
     print("\n".join(paint(f"     {rel}", YELLOW) for rel in files))
-    if not args.yes and ask_user(paint("   Type 'yes' to continue: ", YELLOW, BOLD)).strip().lower() != "yes":
+    print(paint("   This is the default when no account is given. To use your account instead:\n"
+                "   --chrome-profile NAME (your Chrome login; see --chrome-profile list x) or --profile.\n"
+                "   You'll only be asked this once.", YELLOW))
+    if args.yes:  # skipped for this run (e.g. a script), but not remembered: the user hasn't seen it yet
+        return True
+    if ask_user(paint("   Type 'yes' to continue: ", YELLOW, BOLD)).strip().lower() != "yes":
         print("Aborted; nothing was sent.")
         return False
+    try:
+        ANONYMOUS_OK.write_text("confirmed\n")
+    except OSError:
+        pass
     return True
 
 
@@ -128,8 +158,6 @@ def open_chat(args, profile_dir: Path) -> GeminiChat:
 def profile_dir_for(args) -> Path:
     if args.anonymous:
         return Path(tempfile.mkdtemp(prefix="geminonce-anon-"))
-    if args.chrome_profile and args.profile == str(HOME / "profile"):
-        return HOME / "chrome"
     return Path(args.profile)
 
 
@@ -138,6 +166,7 @@ def main() -> int:
         from .pipeline import main as build_main
         return build_main(sys.argv[2:])
     args = build_parser().parse_args()
+    choose_session(args)
     if args.chrome_profile == "list":
         for d, label in chrome_profiles.profiles().items():
             print(f"  {d!r}: {label}")

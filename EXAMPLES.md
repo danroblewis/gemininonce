@@ -25,9 +25,10 @@ new() { mkdir -p ~/geminonce-examples/"$1" && cd ~/geminonce-examples/"$1" \
   && python3 -m venv .venv && . .venv/bin/activate && pip install -q pytest "${@:2}"; }
 ```
 
-The commands use `--anonymous`, meaning signed-out free-tier Gemini (Flash-Lite). Drop it to use
-your account, where the spec and test plan get Pro. Add `--accept` to run without discussing the
-spec, plan and tests, which is useful for comparing runs. What to record for each run:
+The commands run signed out (free-tier Gemini, Flash-Lite), which is the default when no account is
+given. Add `--chrome-profile NAME` to use your account, where the spec and test plan get Pro. Add
+`--accept` to run without discussing the spec, plan and tests, which is useful for comparing runs. What to
+record for each run:
 - the stage where it got stuck, if any
 - the number of messages and the cost
 - the number of tests
@@ -53,7 +54,7 @@ dependency, looks up the latest version on PyPI (https://pypi.org/pypi/<name>/js
 latest release date, and a status of up-to-date, outdated, yanked or deprecated. Compare versions with the \
 packaging library (PEP 440) for PyPI and semver for npm, ignore pre-releases unless --pre is given, exit \
 with code 1 if anything is outdated, and handle packages that don't exist and network errors gracefully." \
-  --dir . --anonymous
+  --dir .
 ```
 
 ### 2. GitHub release notes digest
@@ -72,7 +73,7 @@ pagination, sending the X-GitHub-Api-Version header), keeps releases published o
 prints a Markdown digest per repo: version, date, and the release-note lines that mention breaking changes \
 (BREAKING, deprecated, removed, migration). It works without a token (60 requests/hour), uses GITHUB_TOKEN \
 if set, and reports rate limiting clearly using the X-RateLimit-Remaining and X-RateLimit-Reset headers." \
-  --dir . --anonymous
+  --dir .
 ```
 
 ### 3. Earthquake watcher
@@ -90,7 +91,7 @@ earthquake within --radius-km of --lat/--lon with magnitude at least --min-mag: 
 magnitude, place, distance in km (haversine), and the USGS event URL. It remembers alerted event ids in a \
 JSON state file so each quake is reported once across runs, supports --once or --every SECONDS, and \
 handles feed errors and malformed features without crashing." \
-  --dir . --anonymous
+  --dir .
 ```
 
 ### 4. Travel planner (three APIs chained)
@@ -109,7 +110,7 @@ API in the city's own timezone, and converts a daily budget from the home curren
 using Frankfurter exchange rates (https://api.frankfurter.app/latest). Print one summary per stop and a trip \
 total. Cache API responses on disk for an hour, and if one API fails, still print the rest with that part \
 marked unavailable." \
-  --dir . --anonymous
+  --dir .
 ```
 
 ### 5. Wayback snapshot tool
@@ -128,7 +129,7 @@ to the CDX API (https://web.archive.org/cdx/search/cdx) when needed, printing th
 timestamp. 'diff URL DATE1 DATE2' fetches the two closest snapshots, extracts their visible text (dropping \
 the Wayback toolbar), and prints a unified diff. Use timeouts and retries with backoff, because the \
 archive is slow and sometimes fails, and report clearly when no snapshot exists." \
-  --dir . --anonymous
+  --dir .
 ```
 
 ### 6. Library availability checker
@@ -145,7 +146,7 @@ API (https://openlibrary.org/isbn/<isbn>.json) and 'search TITLE [--author A]' u
 names), first publish year, number of editions, and whether it can be borrowed or read online, using the \
 search results' availability fields. Many fields are missing on real records, so every field must be \
 optional in the output, and it should handle unknown ISBNs and network errors cleanly." \
-  --dir . --anonymous
+  --dir .
 ```
 
 ---
@@ -170,11 +171,11 @@ new pydantic-migration httpx "pydantic>=1.10,<2"
 geminonce build "A Python library and CLI, ghrepo, that fetches a GitHub repository and its latest \
 releases from the GitHub REST API and parses them into Pydantic v1 models (use Pydantic v1 APIs only: \
 BaseModel with class Config, @validator, parse_obj, .dict(), .json()), then prints a summary. Pin \
-pydantic>=1.10,<2 in requirements.txt." --dir . --anonymous
+pydantic>=1.10,<2 in requirements.txt." --dir .
 
 pip install -U "pydantic>=2"      # break it
 pytest -q                          # see what broke
-geminonce . -t "pytest -q" --network --anonymous \
+geminonce . -t "pytest -q" --network \
   -m "We upgraded to Pydantic v2. Migrate the code to the Pydantic v2 API (no v1 compatibility shims) \
       and update requirements.txt."
 ```
@@ -193,11 +194,11 @@ geminonce build "A Python CLI, pypicache, that fetches package metadata from the
 (https://pypi.org/pypi/<name>/json) and caches it in SQLite with SQLAlchemy 1.4 in the 1.x style: \
 engine.execute() for queries, select([table.c.col, ...]) with a list, Table objects with MetaData, and \
 implicit autocommit. It has commands to fetch, list cached packages, and show a package from cache with a \
-max age. Pin sqlalchemy>=1.4,<1.5 in requirements.txt." --dir . --anonymous
+max age. Pin sqlalchemy>=1.4,<1.5 in requirements.txt." --dir .
 
 pip install -U "sqlalchemy>=2"    # break it
 pytest -q
-geminonce . -t "pytest -q" --network --anonymous \
+geminonce . -t "pytest -q" --network \
   -m "We upgraded to SQLAlchemy 2.0. Migrate to the 2.0 API (connections and sessions with explicit \
       commits, select() without lists) and update requirements.txt."
 ```
@@ -214,9 +215,9 @@ new http-client-swap requests httpx pytest-asyncio
 geminonce build "A Python library and CLI, hnfront, that fetches the current Hacker News front page from \
 the official Firebase API (https://hacker-news.firebaseio.com/v0/topstories.json and /v0/item/<id>.json) \
 using the requests library (synchronous), with a timeout and one retry per request, and prints the top N \
-stories with score, comment count and domain." --dir . --anonymous
+stories with score, comment count and domain." --dir .
 
-geminonce . -t "pytest -q" --network --anonymous \
+geminonce . -t "pytest -q" --network \
   -m "Replace requests with httpx and make the library async (httpx.AsyncClient, fetching items \
       concurrently with asyncio.gather, keeping the timeout and retry). The CLI stays synchronous from the \
       user's point of view. Update the tests (pytest-asyncio) and requirements.txt."
@@ -236,9 +237,9 @@ itself (research), and the response shape is completely different.
 new pypi-api-change httpx packaging
 geminonce build "A Python CLI, pkghistory, that lists every released version of a PyPI package with its \
 upload date and whether it was yanked, oldest first, using the 'releases' field of the PyPI JSON API \
-(https://pypi.org/pypi/<name>/json). Options: --since DATE and --latest N." --dir . --anonymous
+(https://pypi.org/pypi/<name>/json). Options: --since DATE and --latest N." --dir .
 
-geminonce . -t "pytest -q" --network --anonymous \
+geminonce . -t "pytest -q" --network \
   -m "The 'releases' field of PyPI's /pypi/<name>/json API is deprecated. Switch to the PyPI simple JSON \
       API (PEP 691 and PEP 700: https://pypi.org/simple/<name>/ with the Accept header \
       application/vnd.pypi.simple.v1+json), which lists files with upload times and yanked status per file; \

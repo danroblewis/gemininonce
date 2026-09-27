@@ -224,7 +224,7 @@ def test_empty_directory_is_a_new_project(tmp_path, monkeypatch, capsys):
         raise SystemExit("stop before the browser")
 
     monkeypatch.setattr(cli, "open_chat", fake_open_chat)
-    monkeypatch.setattr(sys, "argv", ["geminonce", str(tmp_path), "-m", "set up a FastAPI project"])
+    monkeypatch.setattr(sys, "argv", ["geminonce", str(tmp_path), "-m", "set up a FastAPI project", "-y"])
     with pytest.raises(SystemExit, match="stop before the browser"):
         cli.main()
     assert "Empty project: Gemini will create the files" in capsys.readouterr().out
@@ -238,3 +238,55 @@ def test_a_missing_or_unreadable_file_still_stops(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["geminonce", str(tmp_path / "blob.bin"), "--root", str(tmp_path), "-m", "x"])
     with pytest.raises(SystemExit, match="No readable files"):
         cli.main()
+
+
+
+@pytest.mark.parametrize("argv, env, anonymous, profile", [
+    ([], {}, True, None),                                            # nothing asked for: anonymous
+    (["--chrome-profile", "Default"], {}, False, "chrome"),          # your Chrome login
+    ([], {"GEMINONCE_CHROME_PROFILE": "Default"}, False, "chrome"),  # ...also from the environment
+    (["--account", "@corp.com"], {}, False, "profile"),              # an account: geminonce's own profile
+    (["--profile"], {}, False, "profile"),                           # sign in once, remembered
+    (["--profile", "/tmp/myprof"], {}, False, "/tmp/myprof"),
+])
+def test_anonymous_unless_an_account_is_asked_for(argv, env, anonymous, profile, monkeypatch):
+    from geminonce import HOME, cli
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    args = cli.build_parser().parse_args(["x", *argv])
+    monkeypatch.setattr(sys, "argv", ["geminonce", "x", *argv])
+    cli.choose_session(args)
+    assert args.anonymous is anonymous
+    expected = None if profile is None else (profile if profile.startswith("/") else str(HOME / profile))
+    assert (args.profile if not anonymous else None) == expected
+
+
+def test_explicit_anonymous_still_refuses_account_flags(monkeypatch):
+    from geminonce import cli
+    monkeypatch.setattr(sys, "argv", ["geminonce", "x", "--anonymous", "--account", "@corp.com"])
+    args = cli.build_parser().parse_args(["x", "--anonymous", "--account", "@corp.com"])
+    with pytest.raises(SystemExit, match="can't be combined with --account"):
+        cli.choose_session(args)
+
+
+def test_anonymous_warning_once_then_a_one_line_notice(monkeypatch, capsys):
+    from geminonce import cli
+    cli.ANONYMOUS_OK.unlink(missing_ok=True)
+    args = cli.build_parser().parse_args(["x"])
+    monkeypatch.setattr(sys, "stdin", io.StringIO("yes\n"))
+    assert cli.confirm_anonymous(args, {"a.py": "x"})
+    first = capsys.readouterr().out
+    assert "ANONYMOUS MODE" in first and "only be asked this once" in first and cli.ANONYMOUS_OK.exists()
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))  # no answer needed now
+    assert cli.confirm_anonymous(args, {"a.py": "x"})
+    second = capsys.readouterr().out
+    assert "ANONYMOUS MODE" not in second and "Signed-out Gemini (free tier)" in second
+
+
+
+def test_yes_skips_the_confirmation_without_remembering_it(capsys):
+    from geminonce import cli
+    cli.ANONYMOUS_OK.unlink(missing_ok=True)
+    args = cli.build_parser().parse_args(["x", "-y"])
+    assert cli.confirm_anonymous(args, {"a.py": "x"})
+    assert not cli.ANONYMOUS_OK.exists()  # the next interactive run still shows the full warning once

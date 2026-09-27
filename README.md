@@ -31,15 +31,15 @@ geminonce build "a constraint solver in python that can solve n-queens" --dir nq
 # Use your work Google account (reuses your Chrome login: SSO, 2FA)
 geminonce src/ -t "pytest" --chrome-profile "Profile 2" --account @yourcompany.com
 
-# Signed-out, free-tier Gemini in a throwaway browser (treat everything sent as public)
-geminonce src/ -t "pytest" --anonymous
 
 # Unattended: the exit code says whether the tests pass
 until geminonce src/ tests/ -t "pytest -x"; do :; done
 ```
 
-On the first run without `--chrome-profile` or `--anonymous`, a Chrome window opens so you can sign
-in to Gemini once.
+By default it uses **signed-out, free-tier Gemini** (Flash-Lite) in a throwaway browser, so no setup is
+needed. Treat what you send as public; you're warned once, the first time. To use your Google account (Flash,
+Pro, your workplace's data protections), pass `--chrome-profile NAME` to reuse your Chrome login, or
+`--profile` to sign in once in geminonce's own browser.
 
 ## What you'll see
 
@@ -60,9 +60,10 @@ sent. Still, review the result with `git diff`.
 |---|---|
 | `-t CMD` | test command; done when it exits 0 |
 | `-m TEXT` | what you want done |
-| `--model flash\|pro\|flash-lite` | Gemini model (default `flash`) |
+| `--model flash\|pro\|flash-lite` | Gemini model (default `flash`, or `flash-lite` when signed out) |
 | `--chrome-profile NAME`, `--account TEXT` | use your Chrome login, and require an account (`--chrome-profile list x` lists profiles) |
-| `--anonymous`, `-y` | signed-out free tier; `-y` skips its confirmation |
+| `--profile [DIR]` | sign in once in geminonce's own browser profile, remembered |
+| `--anonymous`, `-y` | force signed-out mode (the default without an account); `-y` skips its one-time confirmation |
 | `--show`, `-v` | show the browser; print everything in full |
 | `-n N`, `--patience N` | round cap (20); rounds without progress before asking you (3) |
 | `--no-sandbox` | let the test command use the network and write outside the project |

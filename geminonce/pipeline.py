@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 
 from . import HOME, protocol
-from .cli import HelpFormatter, add_session_options, confirm_anonymous, open_chat, profile_dir_for
+from .cli import HelpFormatter, add_session_options, choose_session, confirm_anonymous, open_chat, profile_dir_for
 from .console import BLUE, BOLD, CYAN, DIM, GREEN, RED, YELLOW, ask_user, paint
 from .gemini import GeminiChat, GeminiTimeout
 from .highlight import Highlighter
@@ -580,6 +580,7 @@ class Build:
 
 def main(argv: list[str]) -> int:
     args = build_parser().parse_args(argv)
+    choose_session(args)
     root = Path(args.dir).resolve()
     if args.start == "spec" and not args.idea:
         sys.exit("Say what to build: geminonce build \"a CLI that ...\"")
