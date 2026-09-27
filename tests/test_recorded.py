@@ -366,3 +366,21 @@ def test_links_keep_their_urls_and_cited_sources_are_collected(page):
                                          "https://pypi.org/project/pytest/",
                                          "https://developers.google.com/optimization/cp/queens",
                                          "https://github.com/pytest-dev/pytest"]
+
+
+def test_blocked_message_box_is_reported_not_crashed(page, monkeypatch, tmp_path):
+    """When something covers Gemini's input (your case: a notice or dialog), we reload once, then raise
+    GeminiTimeout (which the loop retries) saying what the page shows, with a screenshot and the HTML."""
+    from gemininonce import gemini as gemini_module
+    from gemininonce.gemini import GeminiChat, GeminiTimeout
+    monkeypatch.setattr(gemini_module, "HOME", tmp_path)
+    monkeypatch.setattr(GeminiChat, "TYPE_TIMEOUT_MS", 500)
+    page.set_content("""<div role="dialog">You've reached your limit for now. Sign in to continue.</div>
+        <rich-textarea><div contenteditable="true" style="display:none"></div></rich-textarea>""")
+    chat = GeminiChat.__new__(GeminiChat)
+    chat.browser, chat._page = None, page
+    with pytest.raises(GeminiTimeout) as e:
+        quiet(chat._type_message, "hello")
+    assert "Couldn't type into Gemini's message box" in str(e.value)
+    assert "reached your limit" in str(e.value)
+    assert (tmp_path / "last_error.png").exists() and (tmp_path / "last_error.html").exists()

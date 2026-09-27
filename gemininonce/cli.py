@@ -195,7 +195,12 @@ def main() -> int:
 
 
 def entry() -> None:
+    from playwright.sync_api import Error as PWError
     try:
         sys.exit(main())
     except KeyboardInterrupt:
         sys.exit(130)
+    except PWError as e:  # the browser, not the code: one clear line instead of a Playwright traceback
+        first = str(e).strip().splitlines()[0] if str(e).strip() else type(e).__name__
+        sys.exit(f"\nBrowser error: {first}\nIf Gemini's page looks different now, see docs/development.md "
+                 f"(\"When it breaks\"); rerunning (or /new) usually helps.")

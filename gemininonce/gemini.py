@@ -361,11 +361,9 @@ class GeminiChat:
         if self.model and model_key(self.current_model()) != model_key(self.model):
             print(f"  model changed to {self.current_model()!r}; switching back to {self.model!r}")
             self.select_model(self.model)
-        n = page.locator(SEL_RESPONSE).count()
-        box = page.locator(SEL_INPUT).first
-        box.click()
         text = safety.redact(text)  # last line of defense: never send secrets
-        box.fill(text)
+        box = self._type_message(text)
+        n = page.locator(SEL_RESPONSE).count()
         try:
             page.locator(SEL_SEND).first.click(timeout=5_000)
         except PWTimeout:
@@ -399,11 +397,56 @@ class GeminiChat:
         self.last_sources = body.evaluate(SOURCES_JS)
         return body.evaluate(EXTRACT_JS)
 
-    def _timeout(self, what: str):
-        shot = HOME / "last_error.png"
+    TYPE_TIMEOUT_MS = 20_000
+
+    def _type_message(self, text: str):
+        """Put the message in Gemini's input box. If the box can't be typed into (something covering it,
+        or the page stuck), reload the conversation once and try again; then give up with what the page shows."""
+        blocker = ""
+        for attempt in (1, 2):
+            box = self.page.locator(SEL_INPUT).first
+            try:
+                box.click(timeout=self.TYPE_TIMEOUT_MS)
+                box.fill(text, timeout=self.TYPE_TIMEOUT_MS)
+                return box
+            except PWError:  # includes timeouts
+                if attempt == 2:
+                    break
+                blocker = self._page_blocker()
+                print(paint(f"\n  Can't type into Gemini's message box{f' (page shows: {blocker})' if blocker else ''};"
+                            " reloading the conversation...", YELLOW))
+                try:
+                    self.page.reload()
+                    self.page.wait_for_selector(SEL_INPUT, timeout=self.TYPE_TIMEOUT_MS)
+                except PWError:
+                    break
+        self._timeout("Couldn't type into Gemini's message box", blocker)
+
+    def _page_blocker(self) -> str:
+        """Text of whatever might be in the way: open dialogs, or notices about limits or signing in."""
+        found = []
         try:
-            self.page.screenshot(path=str(shot))
-            what += f" (screenshot: {shot})"
+            for el in self.page.locator("[role=dialog], [role=alertdialog], mat-dialog-container, .cdk-overlay-pane").all():
+                if el.is_visible() and (t := " ".join(el.inner_text().split())):
+                    found.append(t)
+            body = " ".join(self.page.locator("body").inner_text(timeout=5_000).split())
+            found += re.findall(r"[^.!?]*\b(?:limit|sign in to continue|try again later|unavailable)\b[^.!?]*[.!?]?", body,
+                                re.I)[:2]
+        except PWError:
+            pass
+        return "; ".join(dict.fromkeys(f.strip() for f in found if f.strip()))[:300]
+
+    def _timeout(self, what: str, seen_before: str = ""):
+        """Raise GeminiTimeout, saying what the page shows (or showed before a reload), with a screenshot and
+        the page's HTML saved."""
+        if (blocker := self._page_blocker() or seen_before):
+            what += f"; the page shows: {blocker}"
+        saved = []
+        try:
+            self.page.screenshot(path=str(HOME / "last_error.png"))
+            saved.append(str(HOME / "last_error.png"))
+            (HOME / "last_error.html").write_text(self.page.content())
+            saved.append(str(HOME / "last_error.html"))
         except Exception:
             pass
-        raise GeminiTimeout(what)
+        raise GeminiTimeout(what + (f" (saved: {', '.join(saved)})" if saved else ""))
