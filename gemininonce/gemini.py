@@ -222,7 +222,17 @@ class GeminiChat:
     def new_chat(self) -> None:
         """Start a fresh conversation (no earlier messages as context)."""
         self.conversation = self.usage.new_conversation()
+        self._to_front()
         self._load()
+
+    def _to_front(self) -> None:
+        """With a visible browser (--show), show the tab of the conversation that's working right now. The
+        reviewer's tab opens on top, so without this the writer's and implementer's tabs stay hidden."""
+        if self.browser is not None and not self.browser.headless:
+            try:
+                self.page.bring_to_front()
+            except PWError:
+                pass
 
     def _load(self) -> None:
         for attempt in range(3):  # ride out a dropped connection
@@ -361,6 +371,7 @@ class GeminiChat:
         """Send a message and return the reply as text/code blocks (see EXTRACT_JS). The same reply as
         Markdown is left in self.last_markdown."""
         page = self.page
+        self._to_front()
         self.last_markdown, self.last_sources = "", []
         # re-check every time: a session can expire or switch mid-run
         self.check_signed_out() if self.anonymous else self.check_account()

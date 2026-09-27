@@ -394,3 +394,24 @@ def test_links_through_google_search_and_self_links_are_cleaned(page):
     md = page.locator("message-content").first.evaluate(EXTRACT_MD_JS)
     assert md == ("- HN API: <https://github.com/hacker-news/api>\n"
                   "- `BASE = \"https://hacker-news.firebaseio.com/v0\"`\n")
+
+
+def test_visible_browser_shows_the_tab_that_is_working():
+    """--show: each conversation brings its own tab to the front before sending (the reviewer's tab would
+    otherwise hide the writer's and implementer's); a hidden browser leaves tabs alone."""
+    from gemininonce.gemini import GeminiChat
+    calls = []
+
+    class Page:
+        def bring_to_front(self):
+            calls.append("front")
+
+    class Browser:
+        headless = False
+
+    chat = GeminiChat.__new__(GeminiChat)
+    chat.browser, chat._page = Browser(), Page()
+    chat._to_front()
+    Browser.headless = True
+    chat._to_front()
+    assert calls == ["front"]
