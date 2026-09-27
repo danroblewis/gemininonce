@@ -165,3 +165,14 @@ def test_step_cost_is_the_difference_and_adds_up():
     # reply 2 alone: input (44k+8k)/4 = 13k tokens, output 1k -> 13k*$2 + 1k*$12 per 1M = $0.038
     assert line == "this reply: ~13.0k in, ~1.0k out, $0.0380  |  total: ~23.0k in, ~2.0k out, $0.0700"
     assert "no API price known for 'Mystery'" in u.step("Mystery", 1, "this reply")
+
+
+def test_each_conversation_only_resends_its_own_history():
+    """A fresh conversation (new chat, or the reviewer's tab) doesn't pay for another one's history."""
+    u = Usage()
+    a, b = u.new_conversation(), u.new_conversation()
+    u.record(4000, 400, a)
+    u.record(4000, 400, b)  # separate conversation: 1k tokens in, not (4.4k + 4k) / 4
+    u.record(400, 400, a)   # back in the first: its own 4.4k of history + 400
+    tok_in, tok_out, _ = u.totals("3.6 flash")
+    assert tok_in == (4000 + 4000 + 4800) / 4 and tok_out == 300

@@ -26,14 +26,20 @@ def _k(n: float) -> str:
 
 
 class Usage:
-    """Characters sent and received per message. price: "IN,OUT" USD per 1M tokens, overriding PRICES."""
+    """Characters sent and received per message, and which conversation it was in (each conversation
+    re-sends only its own history). price: "IN,OUT" USD per 1M tokens, overriding PRICES."""
 
     def __init__(self, price: str | None = None):
-        self.turns: list[tuple[int, int]] = []
+        self.turns: list[tuple[int, int, int]] = []
         self.price = price
+        self._conversations = 0
 
-    def record(self, sent: int, received: int) -> None:
-        self.turns.append((sent, received))
+    def new_conversation(self) -> int:
+        self._conversations += 1
+        return self._conversations
+
+    def record(self, sent: int, received: int, conversation: int = 0) -> None:
+        self.turns.append((sent, received, conversation))
 
     def _rates(self, model: str | None, price: str | None):
         price = price or self.price
@@ -48,14 +54,14 @@ class Usage:
         `upto` messages (all by default). The API is stateless, so each message re-sends the whole
         conversation so far as input; that's counted here (without context caching discounts)."""
         rates = self._rates(model, price)
-        history, tok_in, tok_out, cost = 0, 0.0, 0.0, 0.0
-        for sent, received in self.turns[:upto]:
-            i, o = (history + sent) / CHARS_PER_TOKEN, received / CHARS_PER_TOKEN
+        history, tok_in, tok_out, cost = {}, 0.0, 0.0, 0.0
+        for sent, received, conv in self.turns[:upto]:
+            i, o = (history.get(conv, 0) + sent) / CHARS_PER_TOKEN, received / CHARS_PER_TOKEN
             tok_in, tok_out = tok_in + i, tok_out + o
             if rates:
                 long = i > 200_000
                 cost += (i * rates[2 if long else 0] + o * rates[3 if long else 1]) / 1e6
-            history += sent + received
+            history[conv] = history.get(conv, 0) + sent + received
         return tok_in, tok_out, cost if rates else None
 
     def step(self, model: str | None, since: int, label: str) -> str:

@@ -18,6 +18,7 @@ from pathlib import Path
 from . import HOME, protocol
 from .cli import HelpFormatter, add_session_options, confirm_anonymous, open_chat, profile_dir_for
 from .console import BLUE, BOLD, DIM, GREEN, RED, YELLOW, ask_user, paint
+from .gemini import GeminiChat, GeminiTimeout
 from .highlight import Highlighter
 from .loop import FixLoop
 from .transcript import Transcript
@@ -41,7 +42,11 @@ def build_parser() -> argparse.ArgumentParser:
                     "thinking helps most here; signed out only flash-lite exists)")
     ap.add_argument("--tests-model", help="model for writing tests (default: same as --model)")
     ap.add_argument("--spec-reviews", type=int, default=1,
-                    help="times Gemini re-reads its spec as the test writer would and fixes gaps, before you see it")
+                    help="independent reviews of the spec before you see it: a fresh Gemini session that sees only "
+                         "the spec (as the test writer will) lists gaps, and the spec writer fixes them")
+    ap.add_argument("--tests-reviews", type=int, default=1,
+                    help="independent reviews of the tests: a fresh session compares them with the spec "
+                         "(coverage, exact interface, correct expectations, no over-specifying)")
     ap.add_argument("--accept", action="store_true",
                     help="accept the spec and tests without discussing them (needed without a terminal)")
     add_session_options(ap)
@@ -63,23 +68,38 @@ def under(directory: str, rel: str) -> bool:
 
 def spec_problems(text: str) -> list[str]:
     """What a spec is missing for the test writer to work from it alone."""
+    lines = text.splitlines()
+    found = protocol.headings(lines)
+
+    def section(word: str) -> str | None:
+        """Body of the first heading containing `word`, up to the next heading at the same or a higher level."""
+        for n, (i, level, title) in enumerate(found):
+            if word.lower() in title.lower():
+                end = next((j for j, lv, _ in found[n + 1:] if lv <= level), len(lines))
+                return "\n".join(lines[i + 1:end])
+        return None
+
     problems = []
     if not re.search(r"^\W*R1\b", text, re.M):
         problems.append("It needs numbered, testable requirements (R1, R2, ...), each with acceptance criteria.")
-    interface = re.search(r"^#+[^\n]*Interface[^\n]*\n(.*?)(?=^#{1,2} |\Z)", text, re.S | re.M)
-    if not interface:
+    interface = section("Interface")
+    if interface is None:
         problems.append("It needs an Interface section giving the complete public API.")
-    elif not re.search(r"```[^\n]*\n.*?\(.*?```", interface.group(1), re.S):
+    elif not re.search(r"```[^\n]*\n.*?\(.*?```", interface, re.S):
         problems.append("The Interface section must spell out the API as code: every module, class (constructor, "
                         "attributes, methods), function and exception, with full signatures and types.")
-    if not re.search(r"^#+[^\n]*Architecture", text, re.M):
+    if section("Architecture") is None:
         problems.append("It needs an Architecture section: components, responsibilities and the file/module layout.")
     return problems
 
 
 class Build:
-    def __init__(self, args, ws: Workspace, chat, transcript: Transcript):
+    def __init__(self, args, ws: Workspace, chat, transcript: Transcript, reviewer_factory=None):
         self.args, self.ws, self.chat = args, ws, chat
+        # Reviews run in a separate tab, a fresh conversation each time, so the writer's own conversation
+        # (and the user's discussion with it) is untouched and the reviewer knows only what's in the files.
+        self.reviewer_factory = reviewer_factory or self._open_reviewer
+        self.reviewer = None
         self.transcript = transcript  # for the code stage
         # Stage files are shown in full (then as diffs) by the review, so the transcript only previews them.
         self.quiet_transcript = Transcript(transcript.verbose, transcript.hl, preview=0, prose_lines=8)
@@ -98,7 +118,7 @@ class Build:
         press Enter to accept. Returns the paths written in this stage."""
         loop = FixLoop(self.chat, self.ws, self.quiet_transcript, retries=self.args.retries)
         written_before, attempts, errors, shown = len(self.ws.written), 0, 0, {}
-        reviews_left = self.args.spec_reviews if what == "spec" else 0
+        reviews_left = self.args.spec_reviews if what == "spec" else self.args.tests_reviews
         if not self.args.accept and not sys.stdin.isatty():
             sys.exit(f"Settling the {what} needs a terminal to talk in; pass --accept to take Gemini's first version.")
         while True:
@@ -130,11 +150,13 @@ class Build:
                 prompt = protocol.tests_problems_prompt(problems, notes, self.last_test_out) if what == "tests" \
                     else protocol.spec_problems_prompt(problems, notes, self.spec)
                 continue
-            if written and not problems and reviews_left:  # let it catch its own gaps before the user reads it
+            if written and not problems and reviews_left:  # an independent review before the user reads it
                 reviews_left -= 1
-                print(paint(f"  Asking Gemini to re-read {self.spec} as the test writer would...", DIM))
-                prompt = protocol.spec_self_review_prompt(self.spec)
-                continue
+                if (issues := self.review(what, written)):
+                    prompt = protocol.spec_review_feedback_prompt(issues) if what == "spec" \
+                        else protocol.tests_review_feedback_prompt(issues)
+                    continue
+                reviews_left = 0  # nothing found: no need for more rounds
             self.show_changes(written, shown)
             if problems:
                 print(paint(f"  Still not right after {attempts} tries:\n  " + "\n  ".join(problems), YELLOW))
@@ -153,6 +175,44 @@ class Build:
                 return written
             attempts = 0
             prompt = protocol.discussion_prompt(what, written, answer, what == "spec")
+
+    def _open_reviewer(self):
+        return GeminiChat(self.chat.browser, self.args.account, None, self.args.anonymous,
+                          page=self.chat.browser.new_tab(), usage=self.chat.usage)
+
+    def review(self, what: str, written: list[str]) -> str | None:
+        """Have a fresh Gemini session review the stage's files; returns its issues, or None if it found
+        nothing (or couldn't answer)."""
+        if self.reviewer is None:
+            self.reviewer = self.reviewer_factory()
+        else:
+            self.reviewer.new_chat()
+        if self.chat.model:
+            self.use_model(self.chat.model, fallback_ok=True, chat=self.reviewer)  # same model as the writer
+        spec = (self.ws.root / self.spec).read_text()
+        if what == "spec":
+            print(paint(f"\n  ▶ Independent review: a fresh Gemini session reads only {self.spec}, as the test "
+                        "writer will", BLUE, BOLD))
+            msg = protocol.spec_review_prompt(spec, self.spec)
+        else:
+            tests = {rel: (self.ws.root / rel).read_text() for rel in written if under(self.tests_dir, rel)}
+            print(paint(f"\n  ▶ Independent review: a fresh Gemini session checks the tests against {self.spec}",
+                        BLUE, BOLD))
+            msg = protocol.tests_review_prompt(spec, self.spec, tests, self.args.test)
+        self.quiet_transcript.outgoing(msg)
+        try:
+            blocks = self.reviewer.ask(msg)
+        except GeminiTimeout as e:
+            print(paint(f"  {e}; skipping this review", YELLOW))
+            return None
+        Transcript(self.transcript.verbose, self.ws.hl).reply(blocks)
+        usage = self.reviewer.usage
+        print(paint(f"  $ {usage.step(self.reviewer.model, len(usage.turns) - 1, 'review')}", GREEN))
+        found = getattr(self.reviewer, "last_markdown", "") or protocol.blocks_markdown(blocks)
+        if protocol.reviewer_found_nothing(found):
+            print(paint("  Reviewer found no issues.", GREEN))
+            return None
+        return found.strip()
 
     def ask_user_about(self, what: str, written: list[str], problems: list[str]) -> str | None:
         """The user's reply for Gemini, or None once they accept."""
@@ -215,16 +275,17 @@ class Build:
         return problems
 
     # --- stages -----------------------------------------------------------------------------------
-    def use_model(self, wanted: str | None, fallback_ok: bool = False) -> None:
-        """Switch the conversation's model for this stage ('any' or None leaves it alone)."""
+    def use_model(self, wanted: str | None, fallback_ok: bool = False, chat=None) -> None:
+        """Switch a conversation's model (the writer's by default); 'any' or None leaves it alone."""
+        chat = chat or self.chat
         if not wanted or wanted.lower() == "any":
             return
         try:
-            self.chat.select_model(wanted)
+            chat.select_model(wanted)
         except SystemExit as e:
             if not fallback_ok:
                 raise
-            print(paint(f"  {e}\n  Continuing with {self.chat.model or self.chat.current_model()}.", YELLOW))
+            print(paint(f"  {e}\n  Continuing with {chat.model or chat.current_model()}.", YELLOW))
 
     def code_model(self) -> str:
         return self.args.model or ("flash-lite" if self.args.anonymous else "flash")

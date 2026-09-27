@@ -59,14 +59,17 @@ def build(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "stdin", io.StringIO(""))
     monkeypatch.setattr(loop_module.time, "sleep", lambda s: None)
 
-    def make(replies, *extra):
+    def make(replies, *extra, reviews=()):
+        """replies: the writer's; reviews: the independent reviewer's (reviews are off unless asked for)."""
         args = build_parser().parse_args(["add numbers", "--dir", str(tmp_path), "--accept",
                                           "-t", f"{sys.executable} -m pytest -q -p no:cacheprovider",
-                                          *(extra or ("--spec-reviews", "0"))])
+                                          "--spec-reviews", "0", "--tests-reviews", "0", *extra])
         ws = Workspace(tmp_path.resolve(), tmp_path / ".bak", sandbox=False, allow_new_files=True,
                        highlighter=Highlighter())
         chat = ScriptedChat(replies)
-        return Build(args, ws, chat, Transcript()), chat, ws
+        b = Build(args, ws, chat, Transcript(), reviewer_factory=lambda: make.reviewer)
+        make.reviewer = ScriptedChat(reviews)
+        return b, chat, ws
     return make
 
 
@@ -139,18 +142,43 @@ def test_user_settles_the_spec_by_talking_to_gemini(build, tmp_path, monkeypatch
     assert (tmp_path / "SPEC.md").read_text() == updated and len(chat.sent) == 3
 
 
-def test_spec_uses_pro_and_is_self_reviewed_then_stages_switch_back(build, tmp_path):
-    thinner = SPEC.replace("Acceptance: add(2, 3) == 5", "")
-    b, chat, _ = build([reply(("SPEC.md", thinner)), reply(("SPEC.md", SPEC)),
-                        reply(("tests/test_add.py", TESTS)), reply(("add.py", CODE))], "--spec-reviews", "1")
-    passed, printed = run_quiet(b.run)
+def test_spec_uses_pro_and_stages_switch_back(build, tmp_path):
+    b, chat, _ = build([SPEC, reply(("tests/test_add.py", TESTS)), reply(("add.py", CODE))])
+    passed, _ = run_quiet(b.run)
     assert passed and chat.models == ["pro", "flash", "flash"]  # spec on Pro; tests and code on the default
-    assert "as the test writer will" in chat.sent[1] and "re-read SPEC.md" in printed
-    assert (tmp_path / "SPEC.md").read_text() == SPEC  # the self-reviewed version is what the user sees
+
+
+def test_spec_is_reviewed_by_a_fresh_session_that_sees_only_the_spec(build, tmp_path):
+    thinner = SPEC.replace("Acceptance: add(2, 3) == 5", "")
+    b, chat, _ = build([thinner, SPEC], "--spec-reviews", "2",
+                       reviews=["1. R1 has no acceptance criteria: what does add(2, 3) return?", "NO ISSUES"])
+    _, printed = run_quiet(b.write_spec)
+    reviewer = b.reviewer
+    assert len(reviewer.sent) == 2 and reviewer.new_chats == 1  # a fresh conversation for each review
+    first_review = reviewer.sent[0]
+    assert thinner.strip() in first_review and "IDEA" not in first_review  # only the spec, none of the conversation
+    assert chat.sent[1].startswith("An independent reviewer read ONLY the specification")
+    assert "R1 has no acceptance criteria" in chat.sent[1]
+    assert (tmp_path / "SPEC.md").read_text() == SPEC and "Reviewer found no issues" in printed
+    assert len(chat.sent) == 2  # "NO ISSUES" ends the reviewing
+
+
+def test_tests_are_reviewed_against_the_spec_by_a_fresh_session(build, tmp_path):
+    (tmp_path / "SPEC.md").write_text(SPEC)
+    sloppy = TESTS.replace("== 5", "== 5\n    assert add.__doc__ == 'Adds.'")
+    b, chat, _ = build([reply(("tests/test_add.py", sloppy)), reply(("tests/test_add.py", TESTS)),
+                        reply(("add.py", CODE))], "--from", "tests", "--tests-reviews", "1",
+                       reviews=["1. test_r1_adds checks add.__doc__, which the spec never promises."])
+    passed, _ = run_quiet(b.run)
+    assert passed
+    review = b.reviewer.sent[0]
+    assert SPEC.strip() in review and "FILE: tests/test_add.py" in review and "__doc__" in review
+    assert "An independent reviewer compared your tests" in chat.sent[1] and "never promises" in chat.sent[1]
+    assert (tmp_path / "tests/test_add.py").read_text() == TESTS
 
 
 def test_signed_out_keeps_flash_lite_and_explains(build, tmp_path):
-    b, chat, _ = build([reply(("SPEC.md", SPEC))], "--anonymous", "--spec-reviews", "0")
+    b, chat, _ = build([reply(("SPEC.md", SPEC))], "--anonymous")
     chat.signed_out = True
     _, printed = run_quiet(b.write_spec)
     assert "only Flash-Lite is available" in printed and not getattr(chat, "models", [])
@@ -177,3 +205,11 @@ def test_long_questions_are_shown_in_full(build, tmp_path, monkeypatch):
     assert "Question 15?" in printed and "Gemini's full message" in printed
     assert chat.sent[1].startswith("The user says:\nanswers: yes to all")
     assert (tmp_path / "SPEC.md").read_text() == SPEC
+
+
+def test_python_comments_in_the_interface_are_not_mistaken_for_headings():
+    """`# pkg/core.py` inside an Interface code block is a comment, not the end of the section."""
+    from gemininonce.pipeline import spec_problems
+    spec = ("# Spec\n\n## 3. Architecture\npkg/\n\n## 4. Interface\n\n```python\n# pkg/core.py\n\n"
+            "class Solver:\n    def solve(self, n: int) -> list[int]: ...\n```\n\n## 6. Requirements\n- R1: works\n")
+    assert spec_problems(spec) == []

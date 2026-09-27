@@ -108,8 +108,11 @@ EXTRACT_MD_JS = """
       const extra = [];
       for (const c of li.childNodes) {
         if (c.nodeType === 1 && (c.tagName === 'UL' || c.tagName === 'OL')) extra.push(list(c, depth + 1));
-        else if (c.nodeType === 1 && (c.tagName === 'PRE' || c.tagName === 'CODE-BLOCK'))
-          extra.push(fenced(c).split('\\n').map(l => pad + '   ' + l).join('\\n'));
+        else if (c.nodeType === 1 && (c.tagName === 'PRE' || c.tagName === 'CODE-BLOCK' || c.querySelector('pre, code-block'))) {
+          const inner = [];  // block content (e.g. a code block, maybe wrapped in other elements) under the item
+          walk(c, inner);
+          extra.push(inner.join('\\n\\n').split('\\n').map(l => pad + '   ' + l).join('\\n'));
+        }
         else text += inlineNode(c) + (c.nodeType === 1 && c.tagName === 'P' ? ' ' : '');
       }
       const bullet = ul.tagName === 'OL' ? (n++) + '.' : '-';
@@ -125,8 +128,8 @@ EXTRACT_MD_JS = """
     for (const r of rows.slice(1)) out.push('| ' + r.join(' | ') + ' |');
     return out.join('\\n');
   };
-  const out = [];
-  const walk = el => {
+  const walk = (el, out) => {
+    if (el.tagName === 'PRE' || el.tagName === 'CODE-BLOCK') { out.push(fenced(el)); return; }
     for (const c of el.children) {
       const t = c.tagName;
       if (SKIP.has(t)) continue;
@@ -137,11 +140,12 @@ EXTRACT_MD_JS = """
       else if (t === 'TABLE') out.push(table(c));
       else if (t === 'BLOCKQUOTE') out.push(inline(c).trim().split('\\n').map(l => '> ' + l).join('\\n'));
       else if (t === 'HR') out.push('---');
-      else if (c.querySelector(BLOCK)) walk(c);
+      else if (c.querySelector(BLOCK)) walk(c, out);
       else { const s = inline(c).trim(); if (s) out.push(s); }
     }
   };
-  walk(root);
+  const out = [];
+  walk(root, out);
   return out.join('\\n\\n') + '\\n';
 }
 """
@@ -160,18 +164,20 @@ class GeminiChat:
     """
 
     def __init__(self, browser: Browser, account: str | None = None, model: str | None = None,
-                 anonymous: bool = False):
+                 anonymous: bool = False, page=None, usage: Usage | None = None):
         self.browser = browser
         self.required_account = account
         self.anonymous = anonymous
         self.model = model  # resolved to the picker's exact name by select_model()
-        self.usage = Usage()
+        self._page = page  # its own tab (e.g. a reviewer), or None for the browser's main page
+        self.usage = usage or Usage()  # shared with other conversations for one cost total
+        self.conversation = self.usage.new_conversation()
         self.last_markdown = ""  # the latest reply as Markdown (see EXTRACT_MD_JS)
         self._connect()
 
     @property
     def page(self):
-        return self.browser.page
+        return self._page or self.browser.page
 
     def _connect(self) -> None:
         self._load()
@@ -191,6 +197,7 @@ class GeminiChat:
 
     def new_chat(self) -> None:
         """Start a fresh conversation (no earlier messages as context)."""
+        self.conversation = self.usage.new_conversation()
         self._load()
 
     def _load(self) -> None:
@@ -366,7 +373,7 @@ class GeminiChat:
         else:
             self._timeout("Gemini did not finish responding in time")
         print()
-        self.usage.record(len(text), len(prev or ""))
+        self.usage.record(len(text), len(prev or ""), self.conversation)
 
         body = last.locator(SEL_RESPONSE_BODY).first
         (HOME / "last_response.html").write_text(body.evaluate("e => e.outerHTML"))

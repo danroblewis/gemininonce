@@ -43,9 +43,18 @@ class Browser:
         except Exception:
             self.ctx = self.pw.chromium.launch_persistent_context(str(self.profile_dir), **kw)
         self.page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
+        self._disguise(self.page)
+
+    def _disguise(self, page) -> None:
         if self.headless:  # don't advertise "HeadlessChrome" to Google
-            ua = self.page.evaluate("navigator.userAgent").replace("HeadlessChrome", "Chrome")
-            self.ctx.new_cdp_session(self.page).send("Emulation.setUserAgentOverride", {"userAgent": ua})
+            ua = page.evaluate("navigator.userAgent").replace("HeadlessChrome", "Chrome")
+            self.ctx.new_cdp_session(page).send("Emulation.setUserAgentOverride", {"userAgent": ua})
+
+    def new_tab(self):
+        """Another page in the same browser (same sign-in), e.g. for a separate reviewer conversation."""
+        page = self.ctx.new_page()
+        self._disguise(page)
+        return page
 
     def show(self) -> None:
         """Reopen with a visible window (e.g. so the user can sign in)."""

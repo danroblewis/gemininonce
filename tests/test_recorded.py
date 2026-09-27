@@ -302,3 +302,12 @@ def test_dunder_file_names_survive_markdown_bold(page):
     assert [path for path, _ in edits] == ["pkg/__init__.py", "pkg/_main_.py"]
     md = page.locator("message-content").first.evaluate(EXTRACT_MD_JS)
     assert "pkg/__init__.py" in md and "This is **important**." in md
+
+
+def test_code_block_inside_a_list_item_stays_a_code_block(page):
+    page.set_content("""<message-content><div class="markdown"><ul><li><p><strong>Layout</strong>:</p>
+        <response-element><code-block><div class="code-block-decoration"><span>Plaintext</span></div>
+        <pre><code>pkg/\n└── core.py\n</code></pre></code-block></response-element></li><li>Next</li></ul>
+        </div></message-content>""")
+    md = page.locator("message-content").first.evaluate(EXTRACT_MD_JS)
+    assert md == "- **Layout**:\n   ```plaintext\n   pkg/\n   └── core.py\n   ```\n- Next\n"

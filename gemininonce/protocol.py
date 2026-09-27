@@ -165,12 +165,25 @@ FILE: block and don't wrap it in a code block. To look at a project file first, 
 """
 
 
+def headings(lines: list[str]) -> list[tuple[int, int, str]]:
+    """(line index, level, title) of Markdown headings, ignoring `#` lines inside code blocks (such as
+    Python comments in an Interface section)."""
+    out, fence = [], None
+    for i, ln in enumerate(lines):
+        m = re.match(r"\s*(`{3,}|~{3,})", ln)
+        if m and (fence is None or m.group(1).startswith(fence)):
+            fence = None if fence else m.group(1)
+        elif fence is None and (h := re.match(r"(#{1,6}) (.*)", ln)):
+            out.append((i, len(h.group(1)), h.group(2)))
+    return out
+
+
 def spec_document(markdown: str) -> str | None:
     """The spec inside a reply: from its first heading (preferably the `# ` title) to the end, if the
     reply looks like a spec at all (a heading plus requirements or an interface); else None."""
     lines = markdown.splitlines()
-    starts = [i for i, ln in enumerate(lines) if ln.startswith("# ")] or \
-             [i for i, ln in enumerate(lines) if re.match(r"#{1,6} ", ln)]
+    found = headings(lines)
+    starts = [i for i, level, _ in found if level == 1] or [i for i, _, _ in found]
     if not starts:
         return None
     doc = "\n".join(lines[starts[0]:]).strip() + "\n"
@@ -212,18 +225,71 @@ def spec_prompt(idea: str, spec_path: str, test_cmd: str, files: dict[str, str],
     ]))
 
 
-def spec_self_review_prompt(spec_path: str) -> str:
-    """Have the spec writer read its own spec the way the test writer will."""
+NO_ISSUES = "NO ISSUES"
+
+REVIEW_FORMAT = (f"Reply with a numbered list of issues. For each one: where it is, what's wrong, and what "
+                 f"should change. Don't rewrite the document or send files. If nothing matters enough to "
+                 f"change, reply with exactly: {NO_ISSUES}")
+
+
+def spec_review_prompt(spec: str, spec_path: str) -> str:
+    """For a fresh reviewer session that sees only the spec, the way the test writer will."""
     return "\n\n".join([
-        f"Now review {spec_path} as the test writer will: someone who sees ONLY this file and must write "
-        "complete tests from it. First list, briefly, everything they'd have to guess or that's ambiguous: "
-        "missing or vague names, signatures, argument order, types, return values, data formats, error "
-        "behavior, ordering, and requirements without checkable acceptance criteria. Also list anything "
-        "that contradicts itself.",
-        "Then write the complete revised specification that resolves every point (record the decisions "
-        "you made in section 10), starting with its `# ` title heading, with nothing after it.",
+        "You are reviewing a software specification before tests are written from it. Review it as the TEST "
+        "WRITER: you will see only this document and must write complete tests from it, with no other context "
+        "and no design decisions of your own.",
+        "Look for everything you'd have to guess or that's ambiguous: missing or vague module/class/function "
+        "names, signatures, argument order, types, return values, data formats, error behavior (which "
+        "exception, when), ordering and determinism, requirements without checkable acceptance criteria, "
+        "examples whose results are missing or wrong, and contradictions between sections.",
+        f"{spec_path}:\n{fenced(spec, 'markdown')}",
+        REVIEW_FORMAT,
+    ])
+
+
+def spec_review_feedback_prompt(issues: str) -> str:
+    """The fresh reviewer's findings, for the spec writer."""
+    return "\n\n".join([
+        "An independent reviewer read ONLY the specification, as the test writer will, and raised these "
+        f"points:\n\n{issues}",
+        "Revise the specification to resolve them. If you disagree with a point, leave it and say why in "
+        "section 10. Reply with the complete updated specification, starting with its `# ` title heading.",
         SPEC_RULES,
     ])
+
+
+def tests_review_prompt(spec: str, spec_path: str, tests: dict[str, str], test_cmd: str) -> str:
+    """For a fresh reviewer session that sees only the spec and the tests."""
+    return "\n\n".join([
+        "You are reviewing TESTS written from a specification, before any implementation exists. The tests "
+        f"run as `{test_cmd}` and are meant to fail until the code is written.",
+        "Check that:\n"
+        "- every numbered requirement, acceptance criterion, example, error and edge case in the spec is tested;\n"
+        "- names, signatures, types and exceptions match the spec's Interface exactly;\n"
+        "- expected values are actually correct;\n"
+        "- the tests don't demand things the spec doesn't promise (exact error messages, ordering, internal "
+        "helpers, private attributes, particular algorithms);\n"
+        "- tests are independent and deterministic, and would fail only for a missing or wrong implementation, "
+        "not because of mistakes in the tests themselves.",
+        f"{spec_path}:\n{fenced(spec, 'markdown')}",
+        "TESTS:\n\n" + "\n\n".join(f"FILE: {rel}\n{fenced(text)}" for rel, text in tests.items()),
+        REVIEW_FORMAT + " Name the test (or the missing requirement) in each issue.",
+    ])
+
+
+def tests_review_feedback_prompt(issues: str) -> str:
+    """The fresh reviewer's findings, for the test writer."""
+    return "\n\n".join([
+        "An independent reviewer compared your tests with the specification and raised these points:"
+        f"\n\n{issues}",
+        "Fix the tests accordingly. If you disagree with a point, say why in your reply. Send every changed "
+        "test file in full.",
+        RULES,
+    ])
+
+
+def reviewer_found_nothing(reply: str) -> bool:
+    return NO_ISSUES in reply.upper() and len(reply.strip()) < 200
 
 
 def discussion_prompt(what: str, paths: list[str], user_text: str, document: bool = False) -> str:
