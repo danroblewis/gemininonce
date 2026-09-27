@@ -565,13 +565,13 @@ def check_prompt(check: str, files: dict[str, str], layout: str) -> str:
 
 
 def check_retry_prompt(feedback: str, tried: list[tuple[str, int, str]]) -> str:
-    """tried: (command, exit code, output) for the candidates that were run."""
+    """The user wants a different set of candidates. tried: (command, exit code, output) for any that were run."""
     results = "\n\n".join(f"`{cmd}` exited {code}. Output:\n{fenced(out[-1500:] or '(none)')}" for cmd, code, out in tried)
     return "\n\n".join(filter(None, [
-        f"Those didn't work for the user. {('They say: ' + feedback) if feedback else ''}".strip(),
-        results,
-        "Propose 3 to 5 different candidate commands, with the same requirements (exit code is the result, no file "
-        "changes, fast).",
+        f"The user wants a different set of candidate commands. {('They say: ' + feedback) if feedback else ''}".strip(),
+        f"How the ones they tried did:\n\n{results}" if tried else "",
+        "Propose 3 to 5 new candidate commands that follow what they asked for, with the same requirements (the "
+        "exit code is the result, no file changes, fast).",
         CHECK_VERDICT,
         CHECK_FORMAT,
     ]))

@@ -96,16 +96,27 @@ def test_high_risk_candidates_are_flagged_above_the_list(ws, monkeypatch):
     assert out.index("[HIGH] candidate 1: recursive/forced delete") < out.index("Candidate test commands:")
 
 
-def test_user_can_type_their_own_command(ws, monkeypatch):
-    cmd, _ = run(ws, FakeChat([commands_reply(CANDIDATES)]), "1", "my own check", monkeypatch=monkeypatch)
+def test_user_can_type_their_own_command_after_a_dollar_sign(ws, monkeypatch):
+    cmd, _ = run(ws, FakeChat([commands_reply(CANDIDATES)]), "1", "$ my own check", monkeypatch=monkeypatch)
     assert cmd == "my own check"
+
+
+def test_feedback_before_trying_asks_for_a_different_set(ws, monkeypatch):
+    """At 'Try which?', any text that isn't numbers asks Gemini for new suggestions right away."""
+    bash_only = [("Greps the output.", f"{PY} app.py | grep -q asdf && echo PASS: ok || {{ echo FAIL: no asdf; exit 1; }}")]
+    chat = FakeChat([commands_reply(CANDIDATES), commands_reply(bash_only)])
+    cmd, out = run(ws, chat, "use bash scripts, not python", "", "1", monkeypatch=monkeypatch)
+    assert cmd == bash_only[0][1]
+    assert "They say: use bash scripts, not python" in chat.sent[1] and "How the ones they tried did" not in chat.sent[1]
+    assert out.count("Candidate test commands:") == 2 and "✗ FAIL: no asdf" in out
 
 
 def test_r_asks_gemini_for_other_candidates_with_the_results(ws, monkeypatch):
     chat = FakeChat([commands_reply(CANDIDATES[2:3]), commands_reply(CANDIDATES[1:2])])
-    cmd, _ = run(ws, chat, "", "r it needs to look at the output", "", "1", monkeypatch=monkeypatch)
+    cmd, _ = run(ws, chat, "", "it needs to look at the output", "", "1", monkeypatch=monkeypatch)
     assert cmd == VERDICT
     assert "They say: it needs to look at the output" in chat.sent[1] and "exited 0" in chat.sent[1]
+    assert "How the ones they tried did" in chat.sent[1]
     assert "PASS:" in chat.sent[0] and "FAIL:" in chat.sent[0]  # candidates must report a verdict
 
 

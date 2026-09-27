@@ -62,6 +62,11 @@ def verdict(code: int, out: str) -> tuple[str, str, str]:
     return "unclear", f"fails (exit {code}) without saying why: {last}", YELLOW
 
 
+def feedback(answer: str) -> str:
+    """The user's request for different candidates ('r ...' from older habits still works)."""
+    return answer[2:].strip() if answer.startswith("r ") else "" if answer == "r" else answer
+
+
 def show_candidates(found: list[tuple[str, str]], hl) -> None:
     warnings = [(i, f) for i, (_, cmd) in enumerate(found, 1) for f in safety.scan_command(cmd) if f[0] == "high"]
     if warnings:
@@ -101,7 +106,12 @@ def choose_test_command(chat, ws, transcript, files: dict[str, str], layout: str
         interactive = sys.stdin.isatty()
         picks = list(range(1, len(found) + 1))
         if interactive:
-            answer = ask_user(paint("\n  Try which? One number (2), several (1 3), or Enter for all: ", YELLOW)).strip()
+            answer = ask_user(paint("\n  Try which? One number (2), several (1 3), or Enter for all.\n"
+                                    "  Or type what you'd like instead (e.g. 'use bash, not python') for new "
+                                    "suggestions: ", YELLOW)).strip()
+            if answer and not re.fullmatch(r"[\d\s,]+", answer):  # feedback: ask for a different set
+                prompt = protocol.check_retry_prompt(feedback(answer), [])
+                continue
             chosen = [int(x) for x in answer.replace(",", " ").split() if x.isdigit() and 1 <= int(x) <= len(found)]
             picks = chosen or picks
 
@@ -127,15 +137,18 @@ def choose_test_command(chat, ws, transcript, files: dict[str, str], layout: str
             sys.exit("None of the proposed checks fails now for a clear reason; give one with -t.")
 
         while True:
-            answer = ask_user(paint("\n  Use which one as the test? A number, your own command, "
-                                    "r <what's wrong> for other suggestions, or q to quit: ", YELLOW)).strip()
+            answer = ask_user(paint("\n  Use which one as the test? A number, or $ <your own command>.\n"
+                                    "  Or type what to change (e.g. 'use bash') for new suggestions; q quits: ",
+                                    YELLOW)).strip()
             if answer in ("q", "/quit"):
                 sys.exit(1)
             if answer.isdigit() and 1 <= int(answer) <= len(found):
                 return found[int(answer) - 1][1]
-            if answer == "r" or answer.startswith("r "):
+            if answer.startswith("$"):
+                if (own := answer[1:].strip()):
+                    return own  # their own command
+                continue
+            if answer:  # feedback: ask for a different set, showing how these did
                 tried = [(found[i - 1][1], results[i][1], results[i][2]) for i in results]
-                prompt = protocol.check_retry_prompt(answer[1:].strip(), tried)
+                prompt = protocol.check_retry_prompt(feedback(answer), tried)
                 break
-            if answer:
-                return answer  # their own command

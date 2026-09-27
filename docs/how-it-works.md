@@ -24,21 +24,27 @@ geminonce 070_pd.py --check "the output should contain the word asdf"
 ```
 
 Describe in words how to tell it works, and Gemini turns that into a test command:
-1. **Candidates.** It proposes 3–5 shell commands, from the simplest (`python3 070_pd.py | grep -q asdf`) to
-   more thorough ones. Each exits 0 when the check holds and non-zero when it doesn't. Commands the safety
-   checks flag are marked.
-2. **You choose which to try** (`1 3`, or Enter for all). They run in the sandbox, and each shows its exit
-   code, its output (first and last lines), and a verdict:
-   - **fails now:** it detects the problem, which is what you want
-   - **passes already:** it wouldn't detect it
-3. **You pick one:**
+1. **Candidates.** It proposes 3–5 shell commands, each shown with a one-line description. Every candidate
+   reports its own verdict: one line starting `PASS:` or `FAIL:` that says what was expected and what
+   happened, with exit 0 or 1 to match. Commands the safety checks flag as risky are marked above the list.
+2. **You choose which to try:** one number (`2`), several (`1 3`), or Enter for all. Or **type what you'd
+   like instead**, e.g. `use bash, not python` or `check the exact counts`, and Gemini proposes a new set.
+3. **Each one runs in the sandbox** and shows its verdict:
+   - **✗ FAIL: expected 2 lines, got 3:** it detects the problem, with a reason. That's what you want.
+   - **✓ passes already:** it wouldn't detect the problem.
+   - **⚠ errored without a verdict:** the check itself crashed, so it's probably broken.
+   - **fails without saying why:** it failed but didn't say why, so it's weak evidence.
+4. **You pick:**
    - a number
-   - your own command
-   - `r <what's wrong>` for different suggestions (Gemini sees how the others did)
+   - `$ <your own command>`
+   - text for Gemini (what to change), which gets you a new set; Gemini sees how the tried ones did
    - `q` to quit
 
 The chosen command becomes the test (`-t`), your description becomes the task, and the normal loop runs in a
-fresh conversation. Without a terminal, it uses the first candidate that fails now.
+fresh conversation. Without a terminal, it uses the first candidate with a clear `FAIL:` verdict.
+
+A self-reported verdict makes a broken check visible, but it can't prove the check will pass once the code is
+right. Read the `FAIL:` reasons: a sensible one ("expected 2 lines, got 3") is a good sign.
 
 ## Each round
 
