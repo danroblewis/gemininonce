@@ -86,6 +86,12 @@ The console shows a colored transcript of the conversation:
   files are shortened; `-v` prints everything.
 - **Results:** test results in green or red, safety warnings in red or yellow.
 
+Code is syntax-highlighted with [Pygments](https://pygments.org/). The language comes from the
+`FILE:` path, or from the language label Gemini puts on the code block, or Pygments guesses from
+the content. `COMMAND:` blocks are highlighted as shell, and diffs are recognized anywhere. In test
+output, errors are red, passes green and `file:line` locations cyan. Quoted source lines (like
+pytest's) are highlighted in the project's main language.
+
 Colors turn off automatically when output isn't a terminal, or if you set `NO_COLOR`.
 
 **Model:** it uses **Flash** by default. Choose a different model with `--model pro`,
@@ -97,6 +103,46 @@ isn't available, it exits and lists the models Gemini offers.
 
 Other options: `--root` sets the project root that paths are relative to, and
 `--cdp http://127.0.0.1:9222` attaches to a Chrome you started with `--remote-debugging-port=9222`.
+
+## Cost estimate
+
+Gemini web is flat-rate on a personal or Workspace plan, so a run costs nothing extra. At the end
+of each run the tool prints what the same conversation **would cost on the Gemini API**:
+
+```
+Gemini usage: 7 message(s), ~37.0k tokens in (incl. re-sent history), ~2.6k tokens out
+API-equivalent cost (3.6 Flash at $0.75/$3.75 per 1M in/out): ~$0.0375
+```
+
+- **Tokens** are estimated at about 4 characters per token, Google's rule of thumb.
+- **The API has no memory,** so every message pays again for the whole conversation so far as
+  input. The estimate counts it that way, with no caching discount.
+- **Hidden "thinking" tokens can't be seen,** so they're left out.
+- **Prices** come from a built-in table taken from
+  [Google's pricing page](https://ai.google.dev/gemini-api/docs/pricing) (updated 2026-09-24).
+  Flash prices double on 2027-01-01. Override them with `--price IN,OUT` (USD per 1M tokens) or
+  `GEMININONCE_PRICE`.
+
+## Anonymous mode (free tier)
+
+```sh
+gemininonce src/ -t "pytest -x" --anonymous
+```
+
+`--anonymous` guarantees a signed-out, free-tier session:
+- **A fresh throwaway browser profile** each run. No Google account, no cookies, nothing copied
+  from your Chrome. The profile is deleted afterwards.
+- **It won't combine with account options.** `--chrome-profile`, `--account`, `--cdp` and
+  `--profile` given on the command line are errors, and the matching environment variables are
+  ignored.
+- **Signed-out check:** before every message it checks that Gemini is signed out, and refuses to
+  send if it isn't.
+- **Model:** signed out, Gemini only offers **Flash-Lite**, so that's the default here. Asking for
+  another model is an error, not a quiet switch.
+- **Confirmation:** before anything is sent, it lists the files and warns that free-tier chats may
+  be kept by Google, used to improve its products and read by human reviewers, so treat everything
+  as public. You have to type `yes`. For scripts, `-y` skips the question; without a terminal and
+  without `-y` it aborts.
 
 ## Which account is used
 
@@ -153,6 +199,9 @@ These are rough guard rails, not a guarantee. You should still review what Gemin
   findings from [Bandit](https://github.com/PyCQA/bandit), via `bandit` or `uvx bandit`. Serious
   findings need your `y`; otherwise the file is rejected and Gemini is told why. Minor ones (plain
   `subprocess`, network calls) are just shown.
+- **New files need your OK.** Gemini sometimes makes up paths (e.g. `src/todo.py` when the code is
+  in `todo/service.py`). A file that doesn't exist yet is only created if you type `y`. Otherwise
+  Gemini is told which files really exist. Use `--allow-new-files` to skip the question.
 - **Suggested shell commands get the same checks,** shown with warnings before you approve or
   modify them. Commands you approve run outside the sandbox, because they may need the internet
   (e.g. `pip install`).

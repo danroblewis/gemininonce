@@ -21,6 +21,15 @@ from pathlib import Path
 from playwright.sync_api import TimeoutError as PWTimeout
 from playwright.sync_api import sync_playwright
 
+try:
+    from pygments import highlight
+    from pygments.formatters import Terminal256Formatter
+    from pygments.lexers import (BashLexer, DiffLexer, get_lexer_by_name, get_lexer_for_filename,
+                                 guess_lexer)
+    from pygments.util import ClassNotFound
+except ImportError:  # highlighting is optional
+    highlight = None
+
 import gemininonce_safety as safety
 
 # --- Gemini web selectors. These are the most likely thing to break; adjust here. -------------
@@ -50,7 +59,8 @@ EXTRACT_JS = """
     for (const c of el.children) {
       if (isCode(c)) {
         const code = c.querySelector('code') || c.querySelector('pre') || c;
-        out.push({kind: 'code', text: code.innerText});
+        const label = c.querySelector('.code-block-decoration span');
+        out.push({kind: 'code', text: code.innerText, lang: label ? label.innerText.trim() : ''});
       } else if (c.querySelector('pre, code-block')) {
         walk(c);
       } else {
@@ -89,6 +99,64 @@ def paint(text: str, *codes: str) -> str:
 
 def paint_findings(text: str) -> str:
     return "\n".join(paint(ln, RED if "[HIGH]" in ln else YELLOW) for ln in text.splitlines())
+
+
+# --- Syntax highlighting -------------------------------------------------------------------
+PROJECT_LEXER = None  # main language of the files we sent; used for code lines inside test output
+DIFF_RE = re.compile(r"^(@@ .* @@|--- \S|\+\+\+ \S)", re.M)
+
+
+def lexer_for(code: str, path: str | None = None, label: str | None = None):
+    """Pick a Pygments lexer from a file path, Gemini's code-block label, or by content."""
+    if not highlight:
+        return None
+    if DIFF_RE.search(code) and re.search(r"^[+-]", code, re.M):
+        return DiffLexer()
+    for attempt in (lambda: get_lexer_for_filename(path, code) if path else None,
+                    lambda: get_lexer_by_name(label.lower()) if label else None):
+        try:
+            if (lx := attempt()):
+                return lx
+        except ClassNotFound:
+            pass
+    try:
+        lx = guess_lexer(code)
+        return lx if lx.name != "Text only" and lx.analyse_text(code) >= 0.1 else None
+    except ClassNotFound:
+        return None
+
+
+def colorize(code: str, lexer) -> str:
+    if not (COLOR and highlight and lexer):
+        return code
+    return highlight(code, lexer, Terminal256Formatter(style="monokai")).rstrip("\n")
+
+
+def colorize_output(text: str) -> str:
+    """Color test/command output: diffs as diffs, otherwise line by line (errors, passes, locations,
+    and quoted source lines in the project's language)."""
+    if not COLOR:
+        return text
+    if highlight and DIFF_RE.search(text) and re.search(r"^[+-]", text, re.M):
+        return colorize(text, DiffLexer())
+    out = []
+    for ln in text.splitlines():
+        s = ln.lstrip()
+        if re.search(r"\b\d+ (failed|errors?)\b", ln) or re.match(r"(E\s|FAILED\b|ERROR\b)", ln) \
+                or re.match(r"[\w.]*(Error|Exception)\b.*:", s):
+            out.append(paint(ln, RED))
+        elif re.match(r"[=_-]{5,} .* [=_-]{5,}$", ln):  # pytest section headers
+            out.append(paint(ln, BOLD))
+        elif re.search(r"\b\d+ passed\b|\bPASSED\b|^ok\b", ln):
+            out.append(paint(ln, GREEN))
+        elif re.match(r"[\w./\\-]+\.\w+:\d+", s) or s.startswith(("File \"", "at ")):
+            out.append(paint(ln, CYAN))
+        elif PROJECT_LEXER and re.match(r"(>|\s{4,}|\t)\s*\S", ln):
+            lead = re.match(r"(>\s*|\s*)", ln).group(1)
+            out.append(paint(lead, DIM) + colorize(ln[len(lead):], PROJECT_LEXER))
+        else:
+            out.append(paint(ln, DIM))
+    return "\n".join(out)
 
 
 def ask_user(msg: str) -> str:
@@ -155,11 +223,21 @@ def mirror_chrome_profile(profile: str, dest: Path) -> None:
 # --- Gemini browser driver ------------------------------------------------------------------------
 class Gemini:
     def __init__(self, profile: Path, cdp: str | None = None, account: str | None = None,
-                 chrome_profile: str | None = None, model: str | None = None, show: bool = False):
+                 chrome_profile: str | None = None, model: str | None = None, show: bool = False,
+                 anonymous: bool = False):
         self.required_account = account
+        self.anonymous = anonymous
         self.model = model  # resolved to the picker's exact name by select_model()
+        self.turns: list[tuple[int, int]] = []  # (chars sent, chars received) per message
         self.pw = sync_playwright().start()
         self.headless = not show and not cdp
+        try:
+            self._start(profile, cdp, chrome_profile, anonymous)
+        except BaseException:
+            self.close()  # don't leave Chrome running (or writing into a profile we're about to delete)
+            raise
+
+    def _start(self, profile: Path, cdp: str | None, chrome_profile: str | None, anonymous: bool) -> None:
         if cdp:
             self.ctx = self.pw.chromium.connect_over_cdp(cdp).contexts[0]
             self.page = self.ctx.new_page()
@@ -174,7 +252,10 @@ class Gemini:
                 self._ignore += ["--use-mock-keychain", "--password-store=basic"]
             self._launch()
         self._load()
-        if self.headless:  # a hidden browser can't be signed into: show a window only if we need one
+        if anonymous:
+            self.check_signed_out()
+            print(paint("Gemini: signed out (anonymous, free tier)", YELLOW))
+        elif self.headless:  # a hidden browser can't be signed into: show a window only if we need one
             email = self.account()
             if not (self._ok(email) or (email and self._find_account())):
                 print(paint("Opening a browser window so you can sign in...", YELLOW))
@@ -182,7 +263,8 @@ class Gemini:
                 self.headless = False
                 self._launch()
                 self._load()
-        self.check_account(wait=True)
+        if not anonymous:
+            self.check_account(wait=True)
         if self.model:
             self.select_model(self.model)
 
@@ -208,6 +290,11 @@ class Gemini:
             print("Log in to Gemini in the browser window (waiting up to 5 minutes)...")
             self.page.wait_for_url("https://gemini.google.com/**", timeout=300_000)
             self.page.wait_for_selector(SEL_INPUT, timeout=300_000)
+
+    def check_signed_out(self) -> None:
+        """Anonymous mode: refuse to send unless the page is definitely signed out."""
+        if not self.page.locator(SEL_SIGNED_OUT).count() or self.account():
+            raise SystemExit("Refusing to send: --anonymous but Gemini appears to be signed in.")
 
     def account(self) -> str | None:
         """Signed-in email, or None when signed out / unknown. Waits briefly for the header to render."""
@@ -292,14 +379,27 @@ class Gemini:
         """Pick a model from Gemini's mode picker by name ('flash', 'pro', 'flash-lite', '3.1', ...)."""
         self.page.locator(SEL_MODEL_BUTTON).first.click()
         self.page.locator(SEL_MODEL_OPTION).first.wait_for(timeout=10_000)
-        options = {el.inner_text().split("\n")[0].strip(): el for el in self.page.locator(SEL_MODEL_OPTION).all()}
+        options, disabled = {}, []
+        for el in self.page.locator(SEL_MODEL_OPTION).all():
+            name = el.inner_text().split("\n")[0].strip()
+            if el.get_attribute("aria-disabled") == "true":
+                disabled.append(name)  # e.g. Flash/Pro when signed out
+            else:
+                options[name] = el
         w = want.strip().lower()
-        hits = [n for n in options if w in (n.lower(), self._model_key(n))] \
-            or [n for n in options if w in n.lower()]
+        names = [*options, *disabled]  # match against all, so 'flash' can't fall through to Flash-Lite
+        hits = [n for n in names if w in (n.lower(), self._model_key(n))] \
+            or [n for n in names if w in n.lower()]
+        if len(hits) == 1 and hits[0] in disabled:
+            self.page.keyboard.press("Escape")
+            raise SystemExit(f"Model {hits[0]!r} isn't available here"
+                             + (" (signed out: only " + ", ".join(options) + ")" if self.anonymous else "")
+                             + ". Pick another with --model.")
         if len(hits) != 1:
             self.page.keyboard.press("Escape")
             raise SystemExit(f"Model {want!r} is {'ambiguous' if hits else 'not available'}. "
-                             f"Gemini offers: {', '.join(options)}")
+                             f"Gemini offers: {', '.join(options)}"
+                             + (f" (unavailable here: {', '.join(disabled)})" if disabled else ""))
         options[hits[0]].click()
         time.sleep(1)
         if self._model_key(self.current_model()) != self._model_key(hits[0]):
@@ -309,14 +409,16 @@ class Gemini:
 
     def ask(self, text: str, timeout: float = 600) -> list[dict]:
         page = self.page
-        self.check_account()  # re-check every time: a session can expire or switch mid-run
+        # re-check every time: a session can expire or switch mid-run
+        self.check_signed_out() if self.anonymous else self.check_account()
         if self.model and self._model_key(self.current_model()) != self._model_key(self.model):
             print(f"  model changed to {self.current_model()!r}; switching back to {self.model!r}")
             self.select_model(self.model)
         n = page.locator(SEL_RESPONSE).count()
         box = page.locator(SEL_INPUT).first
         box.click()
-        box.fill(safety.redact(text))  # last line of defense: never send secrets
+        text = safety.redact(text)  # last line of defense: never send secrets
+        box.fill(text)
         try:
             page.locator(SEL_SEND).first.click(timeout=5_000)
         except PWTimeout:
@@ -342,6 +444,7 @@ class Gemini:
         else:
             raise TimeoutError("Gemini did not finish responding in time")
         print()
+        self.turns.append((len(text), len(prev or "")))
 
         body = last.locator(SEL_RESPONSE_BODY).first
         (HOME / "last_response.html").write_text(body.evaluate("e => e.outerHTML"))
@@ -349,7 +452,8 @@ class Gemini:
 
     def close(self):
         try:
-            self.ctx.close()
+            if getattr(self, "ctx", None):
+                self.ctx.close()
         finally:
             self.pw.stop()
 
@@ -574,7 +678,8 @@ def merge_partial(old_text: str, new_text: str) -> tuple[str, list[str]] | None:
     return "\n".join(old) + "\n", log
 
 
-def apply_edits(root: Path, edits, backup_dir: Path) -> list[str]:
+def apply_edits(root: Path, edits, backup_dir: Path, known: set[str] = frozenset(),
+                allow_new: bool = False) -> list[str]:
     notes = []
     for rel, content in edits:
         p = (root / rel).resolve()
@@ -585,6 +690,12 @@ def apply_edits(root: Path, edits, backup_dir: Path) -> list[str]:
         if not content.endswith("\n"):
             content += "\n"
         old = p.read_text() if p.exists() else None
+        if old is None and not allow_new and \
+                ask_user(f"  Gemini wants to create a NEW file {rel}. Create it? [y/N] ").strip().lower() != "y":
+            print(paint(f"  REJECTED {rel}: new file not approved", RED))
+            notes.append(f"`{rel}` does not exist, so it was not created. Edit the existing files instead: "
+                         + ", ".join(sorted(known)) + ". Only create a new file if it's truly needed.")
+            continue
         if old is not None and looks_partial(old, content):
             merged = merge_partial(old, content)
             if merged and p.suffix == ".py":
@@ -635,7 +746,7 @@ def run(cmd: str, root: Path, timeout: int, sandbox: bool = False) -> tuple[int,
         code, out = -1, f"{e.stdout or ''}{e.stderr or ''}\n[timed out after {timeout}s]"
     if len(out) > MAX_OUTPUT_CHARS:
         out = "[...truncated...]\n" + out[-MAX_OUTPUT_CHARS:]
-    print(paint("\n".join(out.splitlines()[-40:]), DIM))
+    print(colorize_output("\n".join(out.splitlines()[-40:])))
     print(paint(f"[exit {code}]", GREEN if code == 0 else RED, BOLD))
     return code, out
 
@@ -703,20 +814,36 @@ def show_outgoing(msg: str, verbose: bool) -> None:
             return "\n".join([m.group(1), *lines[:3], f"... {len(lines) - 6} lines ...", *lines[-3:], m.group(3)])
         msg = re.sub(r"^(`{3,})\n(.*?)\n^(\1)$", shorten, msg, flags=re.S | re.M)
     print(paint("\n── You → Gemini " + "─" * 44, CYAN, BOLD))
-    print("\n".join(paint(ln, CYAN) for ln in msg.splitlines()))
+    parts = re.split(r"^(`{3,})[^\n]*\n(.*?)\n\1$", msg, flags=re.S | re.M)
+    for k, part in enumerate(parts):  # re.split yields: text, fence, body, text, fence, body, ...
+        if k % 3 == 0:
+            print("\n".join(paint(ln, CYAN) for ln in part.strip("\n").splitlines()))
+        elif k % 3 == 2:
+            print(colorize_output(part))
 
 
 def show_reply(blocks: list[dict], verbose: bool) -> None:
     print(paint("\n── Gemini " + "─" * 50, MAGENTA, BOLD))
+    pending = None
     for b in blocks:
         if b["kind"] == "text":
             for ln in b["text"].splitlines():
                 print(paint(ln, YELLOW, BOLD) if MARKER.match(ln) else paint(ln, MAGENTA))
+            for m in MARKER.finditer(b["text"]):
+                pending = (m.group(1), m.group(2).strip().strip("'\""))
         else:
-            lines = b["text"].rstrip("\n").splitlines()
-            if not verbose and len(lines) > 20:
-                lines = lines[:12] + [f"... {len(lines) - 12} more lines (-v shows all)"]
-            print("\n".join(paint("  │ " + ln, DIM) for ln in lines))
+            code = b["text"].rstrip("\n")
+            kind, path = pending or (None, None)
+            pending = None
+            lexer = BashLexer() if highlight and kind == "COMMAND" else \
+                lexer_for(code, path if kind == "FILE" else None, b.get("lang"))
+            lines = code.splitlines()
+            more = len(lines) - 12 if not verbose and len(lines) > 20 else 0
+            if more:
+                lines = lines[:12]
+            print("\n".join(paint("  │ ", DIM) + ln for ln in colorize("\n".join(lines), lexer).splitlines()))
+            if more:
+                print(paint(f"  │ ... {more} more lines (-v shows all)", DIM))
 
 
 def ask_for_code(gemini: Gemini, prompt: str, retries: int, verbose: bool = False):
@@ -741,14 +868,76 @@ def ask_for_code(gemini: Gemini, prompt: str, retries: int, verbose: bool = Fals
     return edits, commands, prose
 
 
+# --- API-equivalent cost estimate --------------------------------------------------------------
+# Gemini web on a Workspace/personal plan is flat-rate; this estimates what the same conversation
+# would cost on the Gemini API. USD per 1M tokens: (input, output, input >200k, output >200k).
+# Source: https://ai.google.dev/gemini-api/docs/pricing (page updated 2026-09-24). Override: --price.
+PRICES = {
+    "3.8 flash": (0.75, 3.75, 0.75, 3.75),   # $1.50 / $7.50 from 2027-01-01
+    "3.7 flash": (0.75, 3.75, 0.75, 3.75),   # $1.50 / $7.50 from 2027-01-01
+    "3.6 flash": (0.75, 3.75, 0.75, 3.75),   # $1.50 / $7.50 from 2027-01-01
+    "3.5 flash": (1.50, 9.00, 1.50, 9.00),
+    "3.5 flash-lite": (0.30, 2.50, 0.30, 2.50),
+    "3.1 flash-lite": (0.25, 1.50, 0.25, 1.50),
+    "3.1 pro": (2.00, 12.00, 4.00, 18.00),
+    "2.5 pro": (1.25, 10.00, 2.50, 15.00),
+    "2.5 flash": (0.30, 2.50, 0.30, 2.50),
+    "2.5 flash-lite": (0.10, 0.40, 0.10, 0.40),
+}
+CHARS_PER_TOKEN = 4  # Google's rule of thumb; real tokenization varies (code is often denser)
+
+
+def _k(n: float) -> str:
+    return f"{n / 1000:.1f}k" if n >= 1000 else f"{n:.0f}"
+
+
+def usage_report(turns: list[tuple[int, int]], model: str | None, price: str | None) -> str:
+    """Tokens and API-equivalent cost. The API is stateless, so each message re-sends the whole
+    conversation so far as input; that's counted here (without context caching discounts)."""
+    history, tok_in, tok_out, cost = 0, 0.0, 0.0, 0.0
+    if price:
+        rates = tuple(float(x) for x in price.split(","))
+        rates = (rates[0], rates[1], rates[0], rates[1])
+    else:
+        rates = PRICES.get((model or "").lower())
+    for sent, received in turns:
+        i, o = (history + sent) / CHARS_PER_TOKEN, received / CHARS_PER_TOKEN
+        tok_in, tok_out = tok_in + i, tok_out + o
+        if rates:
+            long = i > 200_000
+            cost += (i * rates[2 if long else 0] + o * rates[3 if long else 1]) / 1e6
+        history += sent + received
+    lines = [f"Gemini usage: {len(turns)} message(s), ~{_k(tok_in)} tokens in (incl. re-sent history), "
+             f"~{_k(tok_out)} tokens out"]
+    if rates:
+        lines.append(f"API-equivalent cost ({price and 'custom price' or model} at ${rates[0]:g}/${rates[1]:g} "
+                     f"per 1M in/out): ~${cost:.4f}  (excludes hidden thinking tokens; "
+                     f"Gemini web itself is free or flat-rate)")
+    else:
+        lines.append(f"No API price known for model {model or 'unknown'!r}; pass --price IN,OUT (USD per 1M tokens)")
+    return "\n".join(lines)
+
+
+class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
+    """Show '(default: X)' only when there's a meaningful default."""
+    def _get_help_string(self, action):
+        if action.default in (None, False, "", argparse.SUPPRESS) or "default" in (action.help or ""):
+            return action.help
+        return super()._get_help_string(action)
+
+
 # --- Main loop ----------------------------------------------------------------------------------
 def main():
-    ap = argparse.ArgumentParser(description="Fix code with Gemini web in a test loop.")
+    ap = argparse.ArgumentParser(description="Fix code with Gemini web in a test loop.",
+                                 formatter_class=_HelpFormatter)
     ap.add_argument("paths", nargs="+", help="files and/or directories to send to Gemini")
     ap.add_argument("-t", "--test", help="command that must pass (exit 0), e.g. 'pytest -x'")
     ap.add_argument("-m", "--message", default="", help="what you want done (optional if --test fails)")
     ap.add_argument("--root", default=".", help="project root; paths in replies are relative to it")
     ap.add_argument("-n", "--max-iters", type=int, default=20, help="hard cap on rounds")
+    ap.add_argument("--price", default=os.environ.get("GEMININONCE_PRICE"), metavar="IN,OUT",
+                    help="API price in USD per 1M input,output tokens for the cost estimate "
+                         "(built-in table used if omitted)")
     ap.add_argument("--retries", type=int, default=3, help="re-asks when Gemini replies without code")
     ap.add_argument("--patience", type=int, default=3, help="stop after N rounds with unchanged test output")
     ap.add_argument("--timeout", type=int, default=300, help="timeout for test/commands (seconds)")
@@ -760,8 +949,15 @@ def main():
                          "'list' shows them")
     ap.add_argument("--no-sandbox", action="store_true",
                     help="run the test command unsandboxed (allows network and writes outside the project)")
-    ap.add_argument("--model", default=os.environ.get("GEMININONCE_MODEL", "flash"),
-                    help="Gemini model to force: flash (default), pro, flash-lite, ...; 'any' leaves it alone")
+    ap.add_argument("--model", default=os.environ.get("GEMININONCE_MODEL"),
+                    help="Gemini model to force: flash, pro, flash-lite, ...; 'any' leaves it alone "
+                         "(default: flash, or flash-lite with --anonymous)")
+    ap.add_argument("--anonymous", action="store_true",
+                    help="use signed-out Gemini (free tier) in a throwaway profile: no account, no copied "
+                         "Chrome data; conversations should be treated as public")
+    ap.add_argument("-y", "--yes", action="store_true", help="skip the --anonymous confirmation")
+    ap.add_argument("--allow-new-files", action="store_true",
+                    help="let Gemini create files without asking (they're often hallucinated paths)")
     ap.add_argument("--show", action="store_true", help="show the browser window (hidden by default)")
     ap.add_argument("-v", "--verbose", action="store_true", help="print full code and outputs in the transcript")
     ap.add_argument("--cdp", help="attach to an already-running Chrome, e.g. http://127.0.0.1:9222")
@@ -773,7 +969,7 @@ def main():
 
     for var in os.environ:
         if var.startswith("GEMININONCE_") and var not in ("GEMININONCE_ACCOUNT", "GEMININONCE_HOME", "GEMININONCE_CHROME_PROFILE",
-                                                                    "GEMININONCE_MODEL"):
+                                                                    "GEMININONCE_MODEL", "GEMININONCE_PRICE"):
             print(f"warning: unknown environment variable {var} (did you mean GEMININONCE_ACCOUNT?)")
     root = Path(args.root).resolve()
     HOME.mkdir(parents=True, exist_ok=True)
@@ -782,10 +978,33 @@ def main():
     files = collect_files(root, args.paths)
     if not files:
         sys.exit("No readable files to send.")
+    global PROJECT_LEXER
+    exts = [Path(rel).suffix for rel in files if Path(rel).suffix]
+    if exts:
+        top = max(set(exts), key=exts.count)
+        PROJECT_LEXER = lexer_for("", f"x{top}")
     size = sum(map(len, files.values()))
     print(f"Sending {len(files)} file(s), {size:,} chars.")
     if size > 400_000 and ask_user("That's a lot for a chat message. Continue? [y/N] ").lower() != "y":
         return 1
+    if args.anonymous:
+        explicit = [f for f in ("--chrome-profile", "--account", "--cdp", "--profile")
+                    if any(a == f or a.startswith(f + "=") for a in sys.argv[1:])]
+        if explicit:
+            sys.exit(f"--anonymous can't be combined with {', '.join(explicit)}")
+        for var in ("GEMININONCE_CHROME_PROFILE", "GEMININONCE_ACCOUNT"):
+            if os.environ.get(var):
+                print(paint(f"--anonymous: ignoring {var}", DIM))
+        args.chrome_profile = args.account = None
+        print(paint("\n⚠  ANONYMOUS MODE: signed-out Gemini, free tier", YELLOW, BOLD))
+        print(paint("   Fresh throwaway browser profile: no Google account, no cookies, nothing copied\n"
+                    "   from Chrome; deleted afterwards. Free-tier chats may be kept by Google, used to\n"
+                    "   improve its products and read by human reviewers. Treat everything sent as PUBLIC:\n"
+                    f"   the task, test output and these {len(files)} file(s):", YELLOW))
+        print("\n".join(paint(f"     {rel}", YELLOW) for rel in files))
+        if not args.yes and ask_user(paint("   Type 'yes' to continue: ", YELLOW, BOLD)).strip().lower() != "yes":
+            print("Aborted; nothing was sent.")
+            return 1
 
     test_out = ""
     if args.test:
@@ -809,19 +1028,27 @@ def main():
     ]))
 
     profile_dir, chrome_profile = Path(args.profile), None
-    if args.chrome_profile:
+    if args.anonymous:
+        profile_dir = Path(tempfile.mkdtemp(prefix="gemininonce-anon-"))
+    elif args.chrome_profile:
         chrome_profile = resolve_profile(args.chrome_profile)
         if args.profile == str(HOME / "profile"):
             profile_dir = HOME / "chrome"
-    gemini = Gemini(profile_dir, args.cdp, args.account, chrome_profile,
-                    None if args.model.lower() == "any" else args.model, args.show)
+    model = args.model or ("flash-lite" if args.anonymous else "flash")
+    try:
+        gemini = Gemini(profile_dir, args.cdp, args.account, chrome_profile,
+                        None if model.lower() == "any" else model, args.show, args.anonymous)
+    except BaseException:
+        if args.anonymous:
+            shutil.rmtree(profile_dir, ignore_errors=True)
+        raise
     passed, stalled, last_sig = False, 0, _signature(test_out)
     try:
         for i in range(1, args.max_iters + 1):
             print(paint(f"\n━━━ Round {i} " + "━" * 50, BLUE, BOLD))
             edits, commands, prose = ask_for_code(gemini, prompt, args.retries, args.verbose)
             print()
-            notes = apply_edits(root, edits, backup_dir)
+            notes = apply_edits(root, edits, backup_dir, set(files), args.allow_new_files)
             results = review_commands(commands, root, args.timeout, args.test)
 
             if not edits and not commands:
@@ -860,7 +1087,11 @@ def main():
     finally:
         if backup_dir.exists():
             print(f"Originals of modified files backed up in {backup_dir}")
+        if gemini.turns:
+            print(paint(usage_report(gemini.turns, gemini.model, args.price), DIM))
         gemini.close()
+        if args.anonymous:
+            shutil.rmtree(profile_dir, ignore_errors=True)
     return 0 if passed or not args.test else 1
 
 
