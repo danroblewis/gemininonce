@@ -109,6 +109,16 @@ def plan_problems(plan: str, spec: str, per_requirement: int) -> list[str]:
     return problems
 
 
+def questions_in(prose: str) -> list[str]:
+    """Questions Gemini asked the user in its reply (lines ending in '?', outside FILE:/COMMAND: lines)."""
+    found = []
+    for line in prose.splitlines():
+        s = line.strip()
+        if s.endswith("?") and len(s) > 8 and not protocol.MARKER.match(s) and "[unlabeled" not in s:
+            found.append(s)
+    return list(dict.fromkeys(found))
+
+
 def readme_problems(text: str) -> list[str]:
     """What a README is missing for someone to install, run and use the project."""
     titles = " ".join(title.lower() for _, _, title in protocol.headings(text.splitlines()))
@@ -273,7 +283,7 @@ class Build:
                 prompt = protocol.discussion_prompt(stage.kind, written, "Don't ask questions: make reasonable "
                                                     "decisions, note them, and write it now.", document)
                 continue
-            answer = self.ask_user_about(stage.kind, written, problems)
+            answer = self.ask_user_about(stage.kind, written, problems, questions_in(prose))
             if answer is None:
                 return written
             attempts = 0
@@ -381,12 +391,31 @@ class Build:
             return None
         return found.strip()
 
-    def ask_user_about(self, what: str, written: list[str], problems: list[str]) -> str | None:
+    def summary(self, what: str, written: list[str]) -> str:
+        """One line on what's up for review, e.g. 'Gemini wrote the tests: 3 files, 27 tests.'"""
+        if not written:
+            return f"Gemini hasn't written the {what} yet."
+        if what == "tests":
+            code = [rel for rel in written if not rel.endswith(".md")]
+            count = sum(len(re.findall(r"\bdef test_\w+", self.read(rel))) for rel in code)
+            return f"Gemini wrote the tests: {len(code)} files, {count} tests."
+        lines = len(self.read(written[0]).splitlines())
+        return f"Gemini wrote the {what} ({written[0]}, {lines} lines)."
+
+    def ask_user_about(self, what: str, written: list[str], problems: list[str],
+                       questions: list[str] = ()) -> str | None:
         """The user's reply for Gemini, or None once they accept."""
+        if questions:
+            print(paint("\n  Gemini asked:", YELLOW, BOLD))
+            print("\n".join(paint(f"    {q}", YELLOW) for q in questions))
+            how = "Type your answers (and anything else Gemini should change)"
+        else:
+            print(paint(f"\n  {self.summary(what, written)}", YELLOW, BOLD))
+            how = f"Review it above. Type what Gemini should change, or ask it something"
         while True:
             answer = ask_user(paint(
-                f"\n  Reply to Gemini: answer its questions, ask your own, or say what to change.\n"
-                f"  /show prints the whole {what}, /quit stops, Enter accepts it.\n  > ", YELLOW)).strip()
+                f"  {how}; Enter accepts the {what}.\n  /show prints the whole {what}, /quit stops.\n  > ",
+                YELLOW)).strip()
             if answer == "/quit":
                 sys.exit(1)
             if answer == "/show":

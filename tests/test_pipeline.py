@@ -376,3 +376,25 @@ def test_e2e_mocks_and_unit_mocks_without_autospec_are_sent_back(build, tmp_path
     problems = chat.sent[1]
     assert "e2e tests must not mock anything" in problems and "tests/e2e/test_add_e2e.py" in problems
     assert "never with autospec=True" in problems
+
+
+def test_review_prompt_lists_gemini_questions_or_says_what_was_written(build, tmp_path, monkeypatch):
+    """No questions: say plainly what's up for review. Questions: list them above the prompt."""
+    from geminonce.pipeline import questions_in
+    assert questions_in("Here you go.\nFILE: a.py\n1. Should add() accept floats?\nIs that OK?") == \
+        ["1. Should add() accept floats?", "Is that OK?"]
+    (tmp_path / "SPEC.md").write_text(SPEC)
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests/TEST_PLAN.md").write_text(PLAN)
+    asking = reply(*TESTS)
+    asking[0]["text"] = "1. Should add() also accept floats?\n" + asking[0]["text"]
+    b, chat, _ = build([reply(*TESTS), asking], "--from", "tests")
+    b.args.accept = False
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    answers = iter(["please add a float test", ""])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    _, printed = run_quiet(b.write_tests)
+    first, second = printed.split("please add a float test")[0], printed
+    assert "Gemini wrote the tests: 2 files, 2 tests." in printed and "Gemini asked" not in first
+    assert "answer its questions" not in printed
+    assert "Gemini asked:" in second and "1. Should add() also accept floats?" in second
