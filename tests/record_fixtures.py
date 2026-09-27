@@ -81,8 +81,8 @@ def main() -> int:
         ws = Workspace(project, HOME / "backups")
         files = ws.collect([str(project / "todo"), str(project / "tests")])
         code, out = ws.run_test(TEST_CMD)
-        prompt = protocol.initial_prompt("", protocol.test_result(TEST_CMD, code, out), files)
-        passed = FixLoop(rec, ws, Transcript(), TEST_CMD).run(prompt, prompt)
+        prompt = protocol.initial_prompt("", protocol.test_result(TEST_CMD, code, out), files, ws.layout())
+        passed = FixLoop(rec, ws, Transcript(), TEST_CMD).run(prompt, (code, out))
         if not passed:
             print("Recorded session did not end with passing tests; fixtures left unchanged.")
             return 1

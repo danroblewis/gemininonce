@@ -50,6 +50,10 @@ EXTRACT_JS = """
 """
 
 
+class GeminiTimeout(TimeoutError):
+    """Gemini didn't start or finish a reply in time (a screenshot is saved as last_error.png)."""
+
+
 def model_key(name: str) -> str:
     """'3.6 Flash' -> 'flash', so a request survives version bumps."""
     return re.sub(r"^\d+(\.\d+)*\s*", "", name.strip().lower())
@@ -241,7 +245,7 @@ class GeminiChat:
         start = time.time()
         while page.locator(SEL_RESPONSE).count() <= n:
             if time.time() - start > 60:
-                raise TimeoutError("Gemini never started a response (message not sent?)")
+                self._timeout("Gemini never started a response (message not sent?)")
             time.sleep(0.5)
 
         # Done when the stop button is gone and the reply text has been stable for a few seconds.
@@ -256,10 +260,19 @@ class GeminiChat:
             elif cur.strip() and not page.locator(SEL_STOP).first.is_visible() and time.time() - stable_since >= 3:
                 break
         else:
-            raise TimeoutError("Gemini did not finish responding in time")
+            self._timeout("Gemini did not finish responding in time")
         print()
         self.usage.record(len(text), len(prev or ""))
 
         body = last.locator(SEL_RESPONSE_BODY).first
         (HOME / "last_response.html").write_text(body.evaluate("e => e.outerHTML"))
         return body.evaluate(EXTRACT_JS)
+
+    def _timeout(self, what: str):
+        shot = HOME / "last_error.png"
+        try:
+            self.page.screenshot(path=str(shot))
+            what += f" (screenshot: {shot})"
+        except Exception:
+            pass
+        raise GeminiTimeout(what)

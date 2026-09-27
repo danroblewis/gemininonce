@@ -17,6 +17,7 @@ from .protocol import fenced
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", ".tox", ".mypy_cache"}
 MAX_FILE_BYTES = 200_000
 MAX_OUTPUT_CHARS = 8_000
+MAX_LAYOUT_FILES = 300
 
 
 def read_text(p: Path) -> str | None:
@@ -58,7 +59,8 @@ class Workspace:
         self.sandbox = sandbox
         self.allow_new_files = allow_new_files
         self.hl = highlighter or Highlighter()
-        self.known: set[str] = set()  # files we sent to Gemini
+        self.known: set[str] = set()  # files the user chose to send; Gemini may re-read these freely
+        self.written: list[str] = []  # files we changed, in order
 
     # --- files --------------------------------------------------------------------------------
     def collect(self, targets: list[str]) -> dict[str, str]:
@@ -85,6 +87,55 @@ class Workspace:
                 files[rel] = text
         self.known = set(files)
         return files
+
+    def layout(self) -> str:
+        """The project's file names (git-tracked, minus secrets), marking the ones we sent."""
+        paths = sorted(str(f.relative_to(self.root)) for f in list_dir(self.root) if f.is_file())
+        paths = [rel for rel in paths if not safety.PROTECTED.search(rel)]
+        if not paths:
+            return ""
+        more = len(paths) - MAX_LAYOUT_FILES
+        lines = [("* " if rel in self.known else "  ") + rel for rel in paths[:MAX_LAYOUT_FILES]]
+        if more > 0:
+            lines.append(f"  ... and {more} more")
+        return "PROJECT LAYOUT (* = included below; ask for others with READ:)\n" + "\n".join(lines)
+
+    def read_files(self, paths: list[str]) -> tuple[dict[str, str], list[str]]:
+        """Contents of files Gemini asked for, plus notes about any we won't send. Files the user
+        chose to send go out freely; anything else needs the user's OK; secrets never do."""
+        files, notes = {}, []
+        for rel in paths:
+            p = (self.root / rel).resolve()
+            if not p.is_relative_to(self.root):
+                notes.append(f"`{rel}` is outside the project, so it wasn't sent.")
+                continue
+            rel = str(p.relative_to(self.root))
+            if not p.is_file():
+                notes.append(f"`{rel}` doesn't exist. Check the PROJECT LAYOUT for the real file names.")
+                continue
+            if safety.PROTECTED.search(rel):
+                notes.append(f"`{rel}` holds secrets or credentials, so it won't be sent.")
+                continue
+            text = read_text(p)
+            if text is None:
+                notes.append(f"`{rel}` is binary or too large to send.")
+                continue
+            if safety.find_secrets(text):
+                notes.append(f"`{rel}` contains what looks like a secret, so it won't be sent.")
+                continue
+            if rel not in self.known and ask_user(
+                    f"  Gemini asks to read {rel}, which you didn't include. Send it? [y/N] ").strip().lower() != "y":
+                print(paint(f"  NOT SENT {rel}", RED))
+                notes.append(f"The user chose not to share `{rel}`. Work with the files you have.")
+                continue
+            print(paint(f"  sending {rel}", GREEN))
+            self.known.add(rel)
+            files[rel] = text
+        return files, notes
+
+    def current_files(self) -> dict[str, str]:
+        """Current contents of every file the user chose to send (for starting a fresh conversation)."""
+        return {rel: text for rel in sorted(self.known) if (text := read_text(self.root / rel)) is not None}
 
     def apply(self, edits: list[tuple[str, str]]) -> list[str]:
         """Write Gemini's edits after the checks; returns notes for Gemini about anything rejected."""
@@ -141,6 +192,9 @@ class Workspace:
                 shutil.copy2(p, backup)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content)
+        if rel not in self.written:
+            self.written.append(rel)
+        self.known.add(rel)  # Gemini wrote it, so it may read it back
         diff = list(difflib.unified_diff((old or "").splitlines(), content.splitlines(), lineterm="", n=0))
         plus = sum(1 for line in diff if line.startswith("+") and not line.startswith("+++"))
         minus = sum(1 for line in diff if line.startswith("-") and not line.startswith("---"))

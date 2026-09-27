@@ -8,6 +8,12 @@ from .highlight import Highlighter
 from .protocol import MARKER, RULES, markers
 
 
+# "PROJECT FILES:" / "REQUESTED FILES:" followed by FILE: + fenced-block pairs, and the layout listing.
+FILES_SECTION = re.compile(r"^(PROJECT|REQUESTED) FILES:\n\n((?:FILE: \S+\n(`{3,})[^\n]*\n.*?\n\3(?:\n\n|\n?\Z))+)",
+                           re.S | re.M)
+LAYOUT_SECTION = re.compile(r"^PROJECT LAYOUT[^\n]*\n((?:[ *] [^\n]*(?:\n|\Z))+)", re.M)
+
+
 class Transcript:
     """verbose prints code and outputs in full instead of shortening them."""
 
@@ -18,10 +24,8 @@ class Transcript:
     def outgoing(self, msg: str) -> None:
         """Print our message: rules dropped, attached files listed by name, long outputs shortened."""
         msg = msg.replace(RULES, "").strip()
-        if "PROJECT FILES:" in msg:
-            head, files_part = msg.split("PROJECT FILES:", 1)
-            names = re.findall(r"^FILE: (\S+)$", files_part, re.M)
-            msg = f"{head.rstrip()}\n\n[{len(names)} files attached: {', '.join(names)}]"
+        msg = LAYOUT_SECTION.sub(lambda m: f"[project layout: {len(m.group(1).splitlines())} files listed]", msg)
+        msg = FILES_SECTION.sub(self._files_summary, msg)
         if not self.verbose:  # the test output was just printed; show only the ends of long fenced blocks
             def shorten(m):
                 lines = m.group(2).splitlines()
@@ -37,6 +41,12 @@ class Transcript:
             elif k % 3 == 2:
                 print(self.hl.output(part))
 
+    @staticmethod
+    def _files_summary(m: re.Match) -> str:
+        names = re.findall(r"^FILE: (\S+)\n`{3,}", m.group(2), re.M)
+        label = "files attached" if m.group(1) == "PROJECT" else "requested files sent"
+        return f"[{len(names)} {label}: {', '.join(names)}]\n\n"
+
     def reply(self, blocks: list[dict]) -> None:
         print(paint("\n── Gemini " + "─" * 50, MAGENTA, BOLD))
         pending = None
@@ -45,7 +55,8 @@ class Transcript:
                 for ln in b["text"].splitlines():
                     print(paint(ln, YELLOW, BOLD) if MARKER.match(ln) else paint(ln, MAGENTA))
                 for marker in markers(b["text"]):
-                    pending = marker
+                    if marker[0] != "READ":
+                        pending = marker
             else:
                 self._code_block(b, *(pending or (None, None)))
                 pending = None

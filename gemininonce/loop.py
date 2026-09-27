@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import re
+import sys
 import time
 
 from . import protocol
-from .console import BLUE, BOLD, GREEN, RED, YELLOW, ask_user, paint
-from .gemini import GeminiChat
+from .console import BLUE, BOLD, DIM, GREEN, RED, YELLOW, ask_user, paint
+from .gemini import GeminiChat, GeminiTimeout
 from .transcript import Transcript
 from .workspace import Workspace
+
+MAX_READS_PER_ROUND = 5  # replies that only ask for files, answered before we count it as "no code"
 
 
 def signature(out: str) -> str:
@@ -21,12 +24,13 @@ def signature(out: str) -> str:
 class FixLoop:
     """Rounds of Gemini edits until `test` passes (or, with no test, until the user stops).
 
-    retries: re-asks per round when a reply has no code. patience: rounds with unchanged test
-    output before giving up. max_iters: hard cap on rounds.
+    retries: re-asks per round when a reply has no code. patience: rounds without progress (a test
+    failure we've already seen, or no edits) before asking the user for help, or stopping if there's
+    no terminal to ask on. max_iters: hard cap on rounds. message: the user's task, for fresh starts.
     """
 
     def __init__(self, chat: GeminiChat, workspace: Workspace, transcript: Transcript, test: str | None = None,
-                 retries: int = 3, patience: int = 3, max_iters: int = 20):
+                 retries: int = 3, patience: int = 3, max_iters: int = 20, message: str = ""):
         self.chat = chat
         self.ws = workspace
         self.transcript = transcript
@@ -34,42 +38,100 @@ class FixLoop:
         self.retries = retries
         self.patience = patience
         self.max_iters = max_iters
+        self.message = message
+        self.unanswered_reads: list[str] = []  # READ: requests that came with edits; answered next message
+        self.last_prose = ""
+
+    def _exchange(self, msg: str) -> list[dict]:
+        """Send msg and return the reply's blocks. A Gemini timeout counts as a reply with no code,
+        so it gets retried like one."""
+        self.transcript.outgoing(msg)
+        try:
+            blocks = self.chat.ask(msg)
+        except GeminiTimeout as e:
+            print(paint(f"\n  {e}", YELLOW))
+            return []
+        self.transcript.reply(blocks)
+        print(paint(f"  {self.chat.usage.running(self.chat.model)}", DIM))
+        return blocks
 
     def ask_for_code(self, prompt: str):
-        """Ask, retrying when the reply has no files or commands (Gemini errors, refusals, chatter)."""
-        msg = prompt
-        for attempt in range(self.retries + 1):
-            self.transcript.outgoing(msg)
-            blocks = self.chat.ask(msg)
-            self.transcript.reply(blocks)
+        """Ask until the reply has edits or commands: serve READ: requests, and retry replies with no code
+        (Gemini errors, refusals, chatter). Returns (edits, commands, prose)."""
+        msg, attempt, reads_left = prompt, 0, MAX_READS_PER_ROUND
+        while True:
+            blocks = self._exchange(msg)
             edits, commands, prose = protocol.parse_reply(blocks)
+            reads = protocol.file_requests(blocks)
+            self.last_prose = prose
+            if reads and not edits and not commands and reads_left:
+                reads_left -= 1
+                files, notes = self.ws.read_files(reads)
+                msg = protocol.read_reply(files, notes)
+                continue
+            self.unanswered_reads = reads
             if edits or commands or attempt == self.retries:
                 return edits, commands, prose
+            attempt += 1
             text = prose.strip()
             if len(text) < 300 or protocol.GEMINI_ERROR.search(text):
-                print(paint(f"  Gemini replied without code; resending ({attempt + 1}/{self.retries})", YELLOW))
+                print(paint(f"  Gemini replied without code; resending ({attempt}/{self.retries})", YELLOW))
                 time.sleep(5)
                 msg = prompt
             else:
-                print(paint(f"  Gemini replied without code; asking for files ({attempt + 1}/{self.retries})", YELLOW))
+                print(paint(f"  Gemini replied without code; asking for files ({attempt}/{self.retries})", YELLOW))
                 msg = protocol.NO_CODE_NUDGE
-        return edits, commands, prose
 
-    def run(self, prompt: str, first_test_output: str = "") -> bool:
-        """Returns True if the test passed."""
-        stalled, last_sig = 0, signature(first_test_output)
+    def _requested_files_notes(self) -> list[str]:
+        """Answer READ: requests that arrived alongside edits, as extra sections of the next message."""
+        if not self.unanswered_reads:
+            return []
+        files, notes = self.ws.read_files(self.unanswered_reads)
+        self.unanswered_reads = []
+        return [s for s in [protocol.requested_files(files)] if s] + notes
+
+    def ask_user_for_help(self, reason: str, rounds: int, code: int | None, out: str | None) -> str | None:
+        """Gemini is stuck: show where things stand and let the user steer. Returns the next message for
+        Gemini, or None to stop. Without a terminal (scripts, CI) this just stops."""
+        print(paint(f"\n✋ Gemini seems stuck: {reason}.", YELLOW, BOLD))
+        if not sys.stdin.isatty():
+            return None
+        print(f"   Rounds so far: {rounds}; files changed: {', '.join(self.ws.written) or 'none'}")
+        if out:
+            print("   Last test output:")
+            print("\n".join(paint("     " + ln, DIM) for ln in out.strip().splitlines()[-6:]))
+        if self.last_prose.strip():
+            print("   Gemini's last message:")
+            print("\n".join(paint("     " + ln, DIM) for ln in self.last_prose.strip().splitlines()[:4]))
+        answer = ask_user(paint("   Type a hint for Gemini, /new for a fresh conversation with the current files, "
+                                "or press Enter to stop:\n   > ", YELLOW)).strip()
+        if not answer:
+            return None
+        if answer == "/new":
+            print(paint("   Starting a fresh conversation...", DIM))
+            self.chat.new_chat()
+            test_out = protocol.test_result(self.test, code, out) if self.test and out else ""
+            return protocol.initial_prompt(self.message, test_out, self.ws.current_files(), self.ws.layout())
+        return protocol.hint_prompt(answer, self.test, code, out)
+
+    def run(self, prompt: str, first: tuple[int, str] | None = None) -> bool:
+        """first: (exit code, output) of the test run before round 1. Returns True if the test passed."""
+        code, out = first or (None, None)
+        seen = {signature(out)} if out else set()
+        stalled = 0
         for i in range(1, self.max_iters + 1):
             print(paint(f"\n━━━ Round {i} " + "━" * 50, BLUE, BOLD))
             edits, commands, _ = self.ask_for_code(prompt)
             print()
             notes = self.ws.apply(edits)
             results = self.ws.review_commands(commands, self.test)
+            notes += self._requested_files_notes()
 
             if not edits and not commands:
-                reply = ask_user("\nNo file changes or commands. Your reply (empty to stop): ").strip()
-                if not reply:
+                prompt = self.ask_user_for_help("its replies had no file changes", i, code, out)
+                if prompt is None:
                     return False
-                prompt = protocol.reply_prompt(reply)
+                stalled = 0
                 continue
 
             if not self.test:
@@ -84,11 +146,15 @@ class FixLoop:
                 print(paint(f"\n✔ Tests pass after {i} round(s).", GREEN, BOLD))
                 return True
             sig = signature(out)
-            stalled = stalled + 1 if sig == last_sig else 0
-            last_sig = sig
+            stalled = stalled + 1 if sig in seen else 0  # same failure again, or back to an earlier one
+            seen.add(sig)
             if stalled >= self.patience:
-                print(paint(f"\n✘ No progress for {stalled} rounds (same test output); stopping.", RED, BOLD))
-                return False
+                prompt = self.ask_user_for_help(f"no progress for {stalled} rounds (the same test failures)",
+                                                i, code, out)
+                if prompt is None:
+                    return False
+                stalled = 0
+                continue
             prompt = protocol.failure_prompt(self.test, code, out, notes, results, bool(stalled))
         print(paint(f"\n✘ Gave up after {self.max_iters} rounds.", RED, BOLD))
         return False

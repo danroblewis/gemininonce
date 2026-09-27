@@ -88,7 +88,9 @@ def confirm_anonymous(args, files: dict[str, str]) -> bool:
     print(paint("   Fresh throwaway browser profile: no Google account, no cookies, nothing copied\n"
                 "   from Chrome; deleted afterwards. Free-tier chats may be kept by Google, used to\n"
                 "   improve its products and read by human reviewers. Treat everything sent as PUBLIC:\n"
-                f"   the task, test output and these {len(files)} file(s):", YELLOW))
+                "   the task, test output, the list of file names in the project, and these\n"
+                f"   {len(files)} file(s) (Gemini may ask for others; you'll be asked before any is sent):",
+                YELLOW))
     print("\n".join(paint(f"     {rel}", YELLOW) for rel in files))
     if not args.yes and ask_user(paint("   Type 'yes' to continue: ", YELLOW, BOLD)).strip().lower() != "yes":
         print("Aborted; nothing was sent.")
@@ -143,12 +145,12 @@ def main() -> int:
     if args.anonymous and not confirm_anonymous(args, files):
         return 1
 
-    test_out = ""
+    test_out, first = "", None
     if args.test:
         if ws.sandbox and not safety.sandbox_argv("true", root):
             print("warning: no sandbox available here (macOS sandbox-exec / Linux bwrap); "
                   "the test command will run Gemini's code unconfined.")
-        code, out = ws.run_test(args.test)
+        first = code, out = ws.run_test(args.test)
         if code == 0 and not args.message:
             print("Test already passes; nothing to do (pass -m to request a change anyway).")
             return 0
@@ -163,16 +165,17 @@ def main() -> int:
         if args.anonymous:
             shutil.rmtree(profile_dir, ignore_errors=True)
         raise
+    chat.usage.price = args.price
     loop = FixLoop(chat, ws, Transcript(args.verbose, ws.hl), args.test, args.retries, args.patience,
-                   args.max_iters)
+                   args.max_iters, args.message)
     passed = False
     try:
-        passed = loop.run(protocol.initial_prompt(args.message, test_out, files), test_out)
+        passed = loop.run(protocol.initial_prompt(args.message, test_out, files, ws.layout()), first)
     finally:
         if backup_dir.exists():
             print(f"Originals of modified files backed up in {backup_dir}")
         if chat.usage.turns:
-            print(paint(chat.usage.report(chat.model, args.price), DIM))
+            print(paint("\n" + chat.usage.report(chat.model), BOLD))
         chat.browser.close()
         if args.anonymous:
             shutil.rmtree(profile_dir, ignore_errors=True)
