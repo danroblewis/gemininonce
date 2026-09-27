@@ -534,3 +534,38 @@ def readme_prompt(spec: str, spec_path: str, test_cmd: str, files: dict[str, str
 
 def readme_document(markdown: str) -> str | None:
     return document(markdown, r"install|usage|run")
+
+
+# --- --check: from a plain-language description to a test command ----------------------------------
+CHECK_FORMAT = ("For each one: a short line saying what it checks, then a line `COMMAND:` and a code block containing "
+                "only the command. Don't change or create any files.")
+
+
+def check_prompt(check: str, files: dict[str, str], layout: str) -> str:
+    return "\n\n".join(filter(None, [
+        f"I need a shell command to use as a pass/fail test for this: {check}",
+        "Propose 3 to 5 different candidate commands, from the simplest to the most thorough. Each must:\n"
+        "- exit 0 when that holds and non-zero when it doesn't (e.g. `grep -q`, `test`, or a short `python3 -c` "
+        "script that asserts), so the exit code IS the result;\n"
+        "- run from the project root using what's already installed, finish within a few seconds, and not change "
+        "any files;\n"
+        "- not use the network unless the check is about something online.",
+        CHECK_FORMAT,
+        layout,
+        "PROJECT FILES:\n\n" + "\n\n".join(f"FILE: {rel}\n{fenced(t)}" for rel, t in files.items()) if files else "",
+    ]))
+
+
+def check_retry_prompt(feedback: str, tried: list[tuple[str, int, str]]) -> str:
+    """tried: (command, exit code, output) for the candidates that were run."""
+    results = "\n\n".join(f"`{cmd}` exited {code}. Output:\n{fenced(out[-1500:] or '(none)')}" for cmd, code, out in tried)
+    return "\n\n".join(filter(None, [
+        f"Those didn't work for the user. {('They say: ' + feedback) if feedback else ''}".strip(),
+        results,
+        "Propose 3 to 5 different candidate commands, with the same requirements (exit code is the result, no file "
+        "changes, fast).",
+        CHECK_FORMAT,
+    ]))
+
+
+CHECK_NUDGE = "Please propose the candidate commands now. " + CHECK_FORMAT

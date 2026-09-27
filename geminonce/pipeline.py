@@ -411,7 +411,7 @@ class Build:
             how = "Type your answers (and anything else Gemini should change)"
         else:
             print(paint(f"\n  {self.summary(what, written)}", YELLOW, BOLD))
-            how = f"Review it above. Type what Gemini should change, or ask it something"
+            how = "Review it above. Type what Gemini should change, or ask it something"
         while True:
             answer = ask_user(paint(
                 f"  {how}; Enter accepts the {what}.\n  /show prints the whole {what}, /quit stops.\n  > ",

@@ -19,6 +19,9 @@ It uses your installed Google Chrome. Without Chrome, run `playwright install ch
 # Fix code until the tests pass
 geminonce src/ tests/ -t "pytest -x"
 
+# Don't have a test command? Describe the check in words: Gemini proposes commands, you try them and pick one
+geminonce 070_pd.py --check "the output should contain the word asdf"
+
 # Say what you want, too
 geminonce app.py -t "npm test" -m "the date parser breaks on ISO week dates"
 

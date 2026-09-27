@@ -11,7 +11,8 @@ from pathlib import Path
 
 from . import HOME, chrome_profiles, env, protocol, safety
 from .browser import Browser
-from .console import BOLD, DIM, YELLOW, ask_user, paint
+from .checks import choose_test_command
+from .console import BOLD, DIM, GREEN, YELLOW, ask_user, paint
 from .gemini import GeminiChat
 from .highlight import Highlighter
 from .loop import FixLoop
@@ -69,6 +70,9 @@ def build_parser() -> argparse.ArgumentParser:
                                  formatter_class=HelpFormatter)
     ap.add_argument("paths", nargs="+", help="files and/or directories to send to Gemini")
     ap.add_argument("-t", "--test", help="command that must pass (exit 0), e.g. 'pytest -x'")
+    ap.add_argument("--check", metavar="TEXT",
+                    help="describe in words how to tell it works (e.g. 'the output contains asdf'); Gemini "
+                         "proposes test commands, you try them and pick one")
     ap.add_argument("-m", "--message", default="", help="what you want done (optional if --test fails)")
     ap.add_argument("--root", default=".", help="project root; paths in replies are relative to it")
     ap.add_argument("--allow-new-files", action="store_true",
@@ -157,38 +161,43 @@ def main() -> int:
     if args.anonymous and not confirm_anonymous(args, files):
         return 1
 
-    test_out, first = "", None
-    if args.test:
-        if ws.sandbox and not safety.sandbox_argv("true", root):
-            print("warning: no sandbox available here (macOS sandbox-exec / Linux bwrap); "
-                  "the test command will run Gemini's code unconfined.")
-        first = code, out = ws.run_test(args.test)
-        if code == 0 and not args.message:
-            print("Test already passes; nothing to do (pass -m to request a change anyway).")
-            return 0
-        test_out = protocol.test_result(args.test, code, out)
-    elif not args.message:
-        sys.exit("Give --test and/or --message.")
+    if args.check and args.test:
+        sys.exit("Give either -t (a command) or --check (a description), not both.")
+    if not (args.test or args.check or args.message):
+        sys.exit("Give --test, --check and/or --message.")
+    if ws.sandbox and (args.test or args.check) and not safety.sandbox_argv("true", root):
+        print("warning: no sandbox available here (macOS sandbox-exec / Linux bwrap); "
+              "the test command will run Gemini's code unconfined.")
 
-    profile_dir = profile_dir_for(args)
+    profile_dir, chat, passed = profile_dir_for(args), None, False
+    transcript = Transcript(args.verbose, ws.hl)
     try:
-        chat = open_chat(args, profile_dir)
-    except BaseException:
-        if args.anonymous:
-            shutil.rmtree(profile_dir, ignore_errors=True)
-        raise
-    chat.usage.price = args.price
-    loop = FixLoop(chat, ws, Transcript(args.verbose, ws.hl), args.test, args.retries, args.patience,
-                   args.max_iters, args.message)
-    passed = False
-    try:
-        passed = loop.run(protocol.initial_prompt(args.message, test_out, files, ws.layout()), first)
+        if args.check:  # turn the description into a test command first
+            chat = open_chat(args, profile_dir)
+            chat.usage.price = args.price
+            args.test = choose_test_command(chat, ws, transcript, files, ws.layout(), args.check)
+            print(paint(f"\n  Test command: {args.test}", GREEN, BOLD))
+            chat.new_chat()
+        test_out, first = "", None
+        if args.test:
+            first = code, out = ws.run_test(args.test)
+            if code == 0 and not args.message:
+                print("Test already passes; nothing to do (pass -m to request a change anyway).")
+                return 0
+            test_out = protocol.test_result(args.test, code, out)
+        message = args.message or (f"Make this true: {args.check}" if args.check else "")
+        if chat is None:
+            chat = open_chat(args, profile_dir)
+            chat.usage.price = args.price
+        loop = FixLoop(chat, ws, transcript, args.test, args.retries, args.patience, args.max_iters, message)
+        passed = loop.run(protocol.initial_prompt(message, test_out, files, ws.layout()), first)
     finally:
         if backup_dir.exists():
             print(f"Originals of modified files backed up in {backup_dir}")
-        if chat.usage.turns:
-            print(paint("\n" + chat.usage.report(chat.model), BOLD))
-        chat.browser.close()
+        if chat is not None:
+            if chat.usage.turns:
+                print(paint("\n" + chat.usage.report(chat.model), BOLD))
+            chat.browser.close()
         if args.anonymous:
             shutil.rmtree(profile_dir, ignore_errors=True)
     return 0 if passed or not args.test else 1

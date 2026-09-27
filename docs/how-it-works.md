@@ -6,6 +6,29 @@ geminonce app.py -t "npm test" -m "the date parser breaks on ISO week dates"
 geminonce lib/ -m "add a --verbose flag"      # no test: you review and send follow-ups
 ```
 
+## No test command yet? `--check`
+
+```sh
+geminonce 070_pd.py --check "the output should contain the word asdf"
+```
+
+Describe in words how to tell it works, and Gemini turns that into a test command:
+1. **Candidates.** It proposes 3–5 shell commands, from the simplest (`python3 070_pd.py | grep -q asdf`) to
+   more thorough ones. Each exits 0 when the check holds and non-zero when it doesn't. Commands the safety
+   checks flag are marked.
+2. **You choose which to try** (`1 3`, or Enter for all). They run in the sandbox, and each shows its exit
+   code, its output (first and last lines), and a verdict:
+   - **fails now:** it detects the problem, which is what you want
+   - **passes already:** it wouldn't detect it
+3. **You pick one:**
+   - a number
+   - your own command
+   - `r <what's wrong>` for different suggestions (Gemini sees how the others did)
+   - `q` to quit
+
+The chosen command becomes the test (`-t`), your description becomes the task, and the normal loop runs in a
+fresh conversation. Without a terminal, it uses the first candidate that fails now.
+
 ## Each round
 
 1. The first message has your files, the task, the failing test output, and a **list of every file

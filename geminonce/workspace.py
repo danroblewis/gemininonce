@@ -232,10 +232,12 @@ class Workspace:
         print(paint(f"  {'M' if old is not None else 'A'} {rel}", GREEN) + f"  (+{plus} -{minus})")
 
     # --- commands -----------------------------------------------------------------------------
-    def run(self, cmd: str, sandbox: bool = False) -> tuple[int, str]:
+    def run(self, cmd: str, sandbox: bool = False, show: bool = True) -> tuple[int, str]:
+        """Run cmd from the project root; show=False runs it quietly (the caller presents the result)."""
         argv = safety.sandbox_argv(cmd, self.root, self.network) if sandbox else None
         label = ("   [sandboxed" + (", network allowed]" if self.network else "]")) if argv else ""
-        print(paint(f"$ {cmd}", BOLD) + paint(label, DIM))
+        if show:
+            print(paint(f"$ {cmd}", BOLD) + paint(label, DIM))
         try:
             r = subprocess.run(argv or cmd, shell=argv is None, cwd=self.root, capture_output=True, text=True,
                                timeout=self.timeout)
@@ -244,8 +246,9 @@ class Workspace:
             code, out = -1, f"{e.stdout or ''}{e.stderr or ''}\n[timed out after {self.timeout}s]"
         if len(out) > MAX_OUTPUT_CHARS:
             out = "[...truncated...]\n" + out[-MAX_OUTPUT_CHARS:]
-        print(self.hl.output("\n".join(out.splitlines()[-40:])))
-        print(paint(f"[exit {code}]", GREEN if code == 0 else RED, BOLD))
+        if show:
+            print(self.hl.output("\n".join(out.splitlines()[-40:])))
+            print(paint(f"[exit {code}]", GREEN if code == 0 else RED, BOLD))
         return code, out
 
     def run_test(self, cmd: str) -> tuple[int, str]:
