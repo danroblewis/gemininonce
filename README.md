@@ -77,6 +77,17 @@ If Gemini sends only the changed functions or classes instead of the whole file,
 `# ... existing code ...` placeholders, each definition is merged into the file by name. If a
 snippet can't be placed unambiguously, it's rejected and Gemini is asked for the complete file.
 
+**Browser and output:** Chrome runs hidden (headless). If you need to sign in, it opens a visible
+window just for that. Use `--show` to watch the browser.
+
+The console shows a colored transcript of the conversation:
+- **Your messages** (cyan): the task, test output and a list of attached files, not their contents.
+- **Gemini's replies** (magenta): `FILE:`/`COMMAND:` markers highlighted and code dimmed. Long
+  files are shortened; `-v` prints everything.
+- **Results:** test results in green or red, safety warnings in red or yellow.
+
+Colors turn off automatically when output isn't a terminal, or if you set `NO_COLOR`.
+
 **Model:** it uses **Flash** by default. Choose a different model with `--model pro`,
 `--model flash-lite`, or any unique part of a name shown in Gemini's model picker (e.g.
 `--model 3.1`). Version numbers are ignored, so `flash` keeps working after an upgrade. Set

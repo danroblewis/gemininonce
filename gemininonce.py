@@ -79,6 +79,18 @@ MARKER = re.compile(r"^[\s*_#>`-]*(FILE|COMMAND)[\s*_`]*:[\s*_`]*([^\s*`]*)", re
 LAZY = re.compile(r"\.\.\.\s*\(?\s*(rest|remaining|existing|unchanged|same as|other)", re.I)
 
 
+COLOR = sys.stdout.isatty() and "NO_COLOR" not in os.environ
+BOLD, DIM, RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN = "1", "2", "31", "32", "33", "34", "95", "36"
+
+
+def paint(text: str, *codes: str) -> str:
+    return f"\033[{';'.join(codes)}m{text}\033[0m" if COLOR and codes else text
+
+
+def paint_findings(text: str) -> str:
+    return "\n".join(paint(ln, RED if "[HIGH]" in ln else YELLOW) for ln in text.splitlines())
+
+
 def ask_user(msg: str) -> str:
     """input() that treats a closed stdin (non-interactive run) as an empty answer."""
     try:
@@ -143,40 +155,59 @@ def mirror_chrome_profile(profile: str, dest: Path) -> None:
 # --- Gemini browser driver ------------------------------------------------------------------------
 class Gemini:
     def __init__(self, profile: Path, cdp: str | None = None, account: str | None = None,
-                 chrome_profile: str | None = None, model: str | None = None):
+                 chrome_profile: str | None = None, model: str | None = None, show: bool = False):
         self.required_account = account
         self.model = model  # resolved to the picker's exact name by select_model()
         self.pw = sync_playwright().start()
+        self.headless = not show and not cdp
         if cdp:
             self.ctx = self.pw.chromium.connect_over_cdp(cdp).contexts[0]
+            self.page = self.ctx.new_page()
         else:
-            args = ["--disable-blink-features=AutomationControlled"]
+            self._profile = profile
+            self._args = ["--disable-blink-features=AutomationControlled"]
+            self._ignore = ["--enable-automation"]
             if chrome_profile:
                 mirror_chrome_profile(chrome_profile, profile)
-                args += [f"--profile-directory={chrome_profile}", "--no-first-run"]
-            kw = dict(
-                headless=False,
-                viewport=None,
-                args=args,
+                self._args += [f"--profile-directory={chrome_profile}", "--no-first-run"]
                 # Playwright's defaults hide the real macOS Keychain, so copied cookies wouldn't decrypt.
-                ignore_default_args=["--enable-automation"]
-                + (["--use-mock-keychain", "--password-store=basic"] if chrome_profile else []),
-            )
-            try:  # real Chrome is much less likely to be blocked at Google sign-in
-                self.ctx = self.pw.chromium.launch_persistent_context(str(profile), channel="chrome", **kw)
-            except Exception:
-                self.ctx = self.pw.chromium.launch_persistent_context(str(profile), **kw)
-        self.page = self.ctx.new_page()
+                self._ignore += ["--use-mock-keychain", "--password-store=basic"]
+            self._launch()
+        self._load()
+        if self.headless:  # a hidden browser can't be signed into: show a window only if we need one
+            email = self.account()
+            if not (self._ok(email) or (email and self._find_account())):
+                print(paint("Opening a browser window so you can sign in...", YELLOW))
+                self.ctx.close()
+                self.headless = False
+                self._launch()
+                self._load()
+        self.check_account(wait=True)
+        if self.model:
+            self.select_model(self.model)
+
+    def _launch(self) -> None:
+        kw = dict(headless=self.headless, args=self._args, ignore_default_args=self._ignore,
+                  viewport={"width": 1280, "height": 900} if self.headless else None)
+        try:  # real Chrome is much less likely to be blocked at Google sign-in
+            self.ctx = self.pw.chromium.launch_persistent_context(str(self._profile), channel="chrome", **kw)
+        except Exception:
+            self.ctx = self.pw.chromium.launch_persistent_context(str(self._profile), **kw)
+        self.page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
+        if self.headless:  # don't advertise "HeadlessChrome" to Google
+            ua = self.page.evaluate("navigator.userAgent").replace("HeadlessChrome", "Chrome")
+            self.ctx.new_cdp_session(self.page).send("Emulation.setUserAgentOverride", {"userAgent": ua})
+
+    def _load(self) -> None:
         self.page.goto(GEMINI_URL)
         try:
             self.page.wait_for_selector(SEL_INPUT, timeout=15_000)
         except PWTimeout:
+            if self.headless:
+                return  # the headless sign-in check will reopen visibly
             print("Log in to Gemini in the browser window (waiting up to 5 minutes)...")
             self.page.wait_for_url("https://gemini.google.com/**", timeout=300_000)
             self.page.wait_for_selector(SEL_INPUT, timeout=300_000)
-        self.check_account(wait=True)
-        if self.model:
-            self.select_model(self.model)
 
     def account(self) -> str | None:
         """Signed-in email, or None when signed out / unknown. Waits briefly for the header to render."""
@@ -249,8 +280,13 @@ class Gemini:
 
     def current_model(self) -> str:
         btn = self.page.locator(SEL_MODEL_BUTTON).first
-        m = re.search(r"currently (.+)", btn.get_attribute("aria-label") or "")
-        return (m.group(1) if m else btn.inner_text()).strip()
+        for _ in range(20):  # the label fills in shortly after page load
+            m = re.search(r"currently (.+)", btn.get_attribute("aria-label") or "")
+            name = (m.group(1) if m else btn.inner_text()).strip()
+            if name:
+                return name
+            time.sleep(0.25)
+        return ""
 
     def select_model(self, want: str) -> None:
         """Pick a model from Gemini's mode picker by name ('flash', 'pro', 'flash-lite', '3.1', ...)."""
@@ -269,7 +305,7 @@ class Gemini:
         if self._model_key(self.current_model()) != self._model_key(hits[0]):
             raise SystemExit(f"Tried to select {hits[0]!r} but Gemini shows {self.current_model()!r}")
         self.model = hits[0]
-        print(f"Gemini model: {hits[0]}")
+        print(paint(f"Gemini model: {hits[0]}", DIM))
 
     def ask(self, text: str, timeout: float = 600) -> list[dict]:
         page = self.page
@@ -300,7 +336,7 @@ class Gemini:
             cur = last.inner_text()
             if cur != prev:
                 prev, stable_since = cur, time.time()
-                print(f"\r  receiving... {len(cur)} chars", end="", flush=True)
+                print(paint(f"\r  receiving... {len(cur)} chars", DIM), end="", flush=True)
             elif cur.strip() and not page.locator(SEL_STOP).first.is_visible() and time.time() - stable_since >= 3:
                 break
         else:
@@ -543,7 +579,7 @@ def apply_edits(root: Path, edits, backup_dir: Path) -> list[str]:
     for rel, content in edits:
         p = (root / rel).resolve()
         if not p.is_relative_to(root):
-            print(f"  REJECTED {rel}: outside project root")
+            print(paint(f"  REJECTED {rel}: outside project root", RED))
             notes.append(f"`{rel}` is outside the project; edit rejected.")
             continue
         if not content.endswith("\n"):
@@ -557,7 +593,7 @@ def apply_edits(root: Path, edits, backup_dir: Path) -> list[str]:
                 except SyntaxError:
                     merged = None
             if not merged:
-                print(f"  REJECTED {rel}: partial edit that couldn't be merged")
+                print(paint(f"  REJECTED {rel}: partial edit that couldn't be merged", RED))
                 notes.append(f"Your `{rel}` was partial and couldn't be merged. Send the COMPLETE file.")
                 continue
             content = merged[0]
@@ -567,9 +603,9 @@ def apply_edits(root: Path, edits, backup_dir: Path) -> list[str]:
         findings = safety.scan_edit(rel, old, content)
         if findings:
             high = [x for x in findings if x[0] == "high"]
-            print(f"  Safety check on {rel}:\n{safety.format_findings(findings)}")
+            print(f"  Safety check on {rel}:\n{paint_findings(safety.format_findings(findings))}")
             if high and ask_user(f"  Write {rel} anyway? [y/N] ").strip().lower() != "y":
-                print(f"  REJECTED {rel}: failed safety check")
+                print(paint(f"  REJECTED {rel}: failed safety check", RED))
                 notes.append(f"Your change to `{rel}` was rejected by a safety check: "
                              + "; ".join(sorted({x[1] for x in high}))
                              + ". Do not do that; solve the problem without it.")
@@ -583,14 +619,14 @@ def apply_edits(root: Path, edits, backup_dir: Path) -> list[str]:
         diff = list(difflib.unified_diff((old or "").splitlines(), content.splitlines(), lineterm="", n=0))
         plus = sum(1 for line in diff if line.startswith("+") and not line.startswith("+++"))
         minus = sum(1 for line in diff if line.startswith("-") and not line.startswith("---"))
-        print(f"  {'M' if old is not None else 'A'} {rel}  (+{plus} -{minus})")
+        print(paint(f"  {'M' if old is not None else 'A'} {rel}", GREEN) + f"  (+{plus} -{minus})")
     return notes
 
 
 # --- Commands -----------------------------------------------------------------------------------
 def run(cmd: str, root: Path, timeout: int, sandbox: bool = False) -> tuple[int, str]:
     argv = safety.sandbox_argv(cmd, root) if sandbox else None
-    print(f"$ {cmd}" + ("   [sandboxed]" if argv else ""))
+    print(paint(f"$ {cmd}", BOLD) + paint("   [sandboxed]" if argv else "", DIM))
     try:
         r = subprocess.run(argv or cmd, shell=argv is None, cwd=root, capture_output=True, text=True,
                            timeout=timeout)
@@ -599,8 +635,8 @@ def run(cmd: str, root: Path, timeout: int, sandbox: bool = False) -> tuple[int,
         code, out = -1, f"{e.stdout or ''}{e.stderr or ''}\n[timed out after {timeout}s]"
     if len(out) > MAX_OUTPUT_CHARS:
         out = "[...truncated...]\n" + out[-MAX_OUTPUT_CHARS:]
-    print("\n".join(out.splitlines()[-40:]))
-    print(f"[exit {code}]")
+    print(paint("\n".join(out.splitlines()[-40:]), DIM))
+    print(paint(f"[exit {code}]", GREEN if code == 0 else RED, BOLD))
     return code, out
 
 
@@ -626,9 +662,9 @@ def review_commands(commands: list[str], root: Path, timeout: int, test_cmd: str
     for cmd in commands:
         if cmd == test_cmd:
             continue  # the loop runs the test itself
-        print("\nGemini suggests running:\n" + "\n".join("    " + line for line in cmd.splitlines()))
+        print(paint("\nGemini suggests running:", YELLOW, BOLD) + "\n" + "\n".join(paint("    " + line, BOLD) for line in cmd.splitlines()))
         if (findings := safety.scan_command(cmd)):
-            print("  WARNING, this command:\n" + safety.format_findings(findings))
+            print(paint("  WARNING, this command:", RED) + "\n" + paint_findings(safety.format_findings(findings)))
         while True:
             a = ask_user("  [a]pprove / [m]odify / [s]kip? ").strip().lower()
             if a in ("a", "m", "s"):
@@ -639,7 +675,7 @@ def review_commands(commands: list[str], root: Path, timeout: int, test_cmd: str
         if a == "m":
             cmd = edit_text(cmd)
             if (findings := safety.scan_command(cmd)):
-                print("  WARNING, edited command:\n" + safety.format_findings(findings))
+                print(paint("  WARNING, edited command:", RED) + "\n" + paint_findings(safety.format_findings(findings)))
         if a == "s" or not cmd:
             results.append(f"User skipped command:\n{fenced(cmd)}")
             continue
@@ -652,20 +688,54 @@ GEMINI_ERROR = re.compile(r"encountered an error|something went wrong|try again|
                           r"having trouble|unable to (?:process|respond)", re.I)
 
 
-def ask_for_code(gemini: Gemini, prompt: str, retries: int):
+def show_outgoing(msg: str, verbose: bool) -> None:
+    """Print our message: rules dropped, attached files listed by name, long outputs shortened."""
+    msg = msg.replace(RULES, "").strip()
+    if "PROJECT FILES:" in msg:
+        head, files_part = msg.split("PROJECT FILES:", 1)
+        names = re.findall(r"^FILE: (\S+)$", files_part, re.M)
+        msg = f"{head.rstrip()}\n\n[{len(names)} files attached: {', '.join(names)}]"
+    if not verbose:  # the test output was just printed; show only the ends of long fenced blocks
+        def shorten(m):
+            lines = m.group(2).splitlines()
+            if len(lines) <= 10:
+                return m.group(0)
+            return "\n".join([m.group(1), *lines[:3], f"... {len(lines) - 6} lines ...", *lines[-3:], m.group(3)])
+        msg = re.sub(r"^(`{3,})\n(.*?)\n^(\1)$", shorten, msg, flags=re.S | re.M)
+    print(paint("\n── You → Gemini " + "─" * 44, CYAN, BOLD))
+    print("\n".join(paint(ln, CYAN) for ln in msg.splitlines()))
+
+
+def show_reply(blocks: list[dict], verbose: bool) -> None:
+    print(paint("\n── Gemini " + "─" * 50, MAGENTA, BOLD))
+    for b in blocks:
+        if b["kind"] == "text":
+            for ln in b["text"].splitlines():
+                print(paint(ln, YELLOW, BOLD) if MARKER.match(ln) else paint(ln, MAGENTA))
+        else:
+            lines = b["text"].rstrip("\n").splitlines()
+            if not verbose and len(lines) > 20:
+                lines = lines[:12] + [f"... {len(lines) - 12} more lines (-v shows all)"]
+            print("\n".join(paint("  │ " + ln, DIM) for ln in lines))
+
+
+def ask_for_code(gemini: Gemini, prompt: str, retries: int, verbose: bool = False):
     """Ask, retrying when the reply has no files or commands (Gemini errors, refusals, chatter)."""
     msg = prompt
     for attempt in range(retries + 1):
-        edits, commands, prose = parse_reply(gemini.ask(msg))
+        show_outgoing(msg, verbose)
+        blocks = gemini.ask(msg)
+        show_reply(blocks, verbose)
+        edits, commands, prose = parse_reply(blocks)
         if edits or commands or attempt == retries:
             return edits, commands, prose
         text = prose.strip()
         if len(text) < 300 or GEMINI_ERROR.search(text):
-            print(f"  Gemini replied without code ({text[:80]!r}); resending ({attempt + 1}/{retries})")
+            print(paint(f"  Gemini replied without code; resending ({attempt + 1}/{retries})", YELLOW))
             time.sleep(5)
             msg = prompt
         else:
-            print(f"  Gemini replied without code; asking for files ({attempt + 1}/{retries})")
+            print(paint(f"  Gemini replied without code; asking for files ({attempt + 1}/{retries})", YELLOW))
             msg = ("Your reply contained no FILE: blocks, so nothing was applied. Reply with the complete "
                    "contents of every file that needs to change.\n\n" + RULES)
     return edits, commands, prose
@@ -692,6 +762,8 @@ def main():
                     help="run the test command unsandboxed (allows network and writes outside the project)")
     ap.add_argument("--model", default=os.environ.get("GEMININONCE_MODEL", "flash"),
                     help="Gemini model to force: flash (default), pro, flash-lite, ...; 'any' leaves it alone")
+    ap.add_argument("--show", action="store_true", help="show the browser window (hidden by default)")
+    ap.add_argument("-v", "--verbose", action="store_true", help="print full code and outputs in the transcript")
     ap.add_argument("--cdp", help="attach to an already-running Chrome, e.g. http://127.0.0.1:9222")
     args = ap.parse_args()
     if args.chrome_profile == "list":
@@ -742,14 +814,13 @@ def main():
         if args.profile == str(HOME / "profile"):
             profile_dir = HOME / "chrome"
     gemini = Gemini(profile_dir, args.cdp, args.account, chrome_profile,
-                    None if args.model.lower() == "any" else args.model)
+                    None if args.model.lower() == "any" else args.model, args.show)
     passed, stalled, last_sig = False, 0, _signature(test_out)
     try:
         for i in range(1, args.max_iters + 1):
-            print(f"\n=== Round {i}: asking Gemini ===")
-            edits, commands, prose = ask_for_code(gemini, prompt, args.retries)
-            if prose.strip():
-                print("\n" + "\n".join("  | " + line for line in prose.strip().splitlines()[:30]))
+            print(paint(f"\n━━━ Round {i} " + "━" * 50, BLUE, BOLD))
+            edits, commands, prose = ask_for_code(gemini, prompt, args.retries, args.verbose)
+            print()
             notes = apply_edits(root, edits, backup_dir)
             results = review_commands(commands, root, args.timeout, args.test)
 
@@ -769,14 +840,14 @@ def main():
 
             code, out = run(args.test, root, args.timeout, sandbox=not args.no_sandbox)
             if code == 0:
-                print(f"\nTests pass after {i} round(s).")
+                print(paint(f"\n✔ Tests pass after {i} round(s).", GREEN, BOLD))
                 passed = True
                 break
             sig = _signature(out)
             stalled = stalled + 1 if sig == last_sig else 0
             last_sig = sig
             if stalled >= args.patience:
-                print(f"\nNo progress for {stalled} rounds (same test output); stopping.")
+                print(paint(f"\n✘ No progress for {stalled} rounds (same test output); stopping.", RED, BOLD))
                 break
             prompt = "\n\n".join([
                 f"I applied your changes. `{args.test}` still fails (exit {code}). Output:\n{fenced(out)}",
@@ -785,7 +856,7 @@ def main():
                 RULES,
             ])
         else:
-            print(f"\nGave up after {args.max_iters} rounds.")
+            print(paint(f"\n✘ Gave up after {args.max_iters} rounds.", RED, BOLD))
     finally:
         if backup_dir.exists():
             print(f"Originals of modified files backed up in {backup_dir}")
