@@ -90,6 +90,7 @@ def test_idea_to_passing_code_with_locked_tests(build, tmp_path):
     assert chat.new_chats == 2  # a fresh conversation for tests, and again for code
     assert "IDEA: add numbers" in chat.sent[0] and SPEC in chat.sent[1]
     assert "locked" in chat.sent[2] and "was not written" not in chat.sent[2]
+    assert "FILE: SPEC.md" in chat.sent[2] and SPEC.strip() in chat.sent[2]  # the implementer gets the spec
 
 
 def test_tests_that_pass_without_code_are_sent_back(build, tmp_path):
