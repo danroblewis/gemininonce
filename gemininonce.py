@@ -21,6 +21,8 @@ from pathlib import Path
 from playwright.sync_api import TimeoutError as PWTimeout
 from playwright.sync_api import sync_playwright
 
+import gemininonce_safety as safety
+
 # --- Gemini web selectors. These are the most likely thing to break; adjust here. -------------
 GEMINI_URL = "https://gemini.google.com/app"
 SEL_INPUT = 'rich-textarea div[contenteditable="true"]'
@@ -28,6 +30,8 @@ SEL_SEND = 'button[aria-label*="Send"]'
 SEL_STOP = 'button[aria-label*="Stop"]'
 SEL_RESPONSE = "model-response"
 SEL_RESPONSE_BODY = "message-content"
+SEL_MODEL_BUTTON = '[data-test-id="bard-mode-menu-button"]'
+SEL_MODEL_OPTION = '[data-test-id^="bard-mode-option"]'
 SEL_SIGNED_OUT = 'a[href*="accounts.google.com/ServiceLogin"]'
 SEL_ACCOUNT = 'a[href*="accounts.google.com/SignOutOptions"], [aria-label^="Google Account"]'
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
@@ -139,8 +143,9 @@ def mirror_chrome_profile(profile: str, dest: Path) -> None:
 # --- Gemini browser driver ------------------------------------------------------------------------
 class Gemini:
     def __init__(self, profile: Path, cdp: str | None = None, account: str | None = None,
-                 chrome_profile: str | None = None):
+                 chrome_profile: str | None = None, model: str | None = None):
         self.required_account = account
+        self.model = model  # resolved to the picker's exact name by select_model()
         self.pw = sync_playwright().start()
         if cdp:
             self.ctx = self.pw.chromium.connect_over_cdp(cdp).contexts[0]
@@ -170,6 +175,8 @@ class Gemini:
             self.page.wait_for_url("https://gemini.google.com/**", timeout=300_000)
             self.page.wait_for_selector(SEL_INPUT, timeout=300_000)
         self.check_account(wait=True)
+        if self.model:
+            self.select_model(self.model)
 
     def account(self) -> str | None:
         """Signed-in email, or None when signed out / unknown. Waits briefly for the header to render."""
@@ -235,13 +242,45 @@ class Gemini:
             self.page.goto("https://accounts.google.com/ServiceLogin?continue=" + GEMINI_URL)
         raise SystemExit("Timed out waiting for Gemini sign-in; nothing was sent.")
 
+    @staticmethod
+    def _model_key(name: str) -> str:
+        """'3.6 Flash' -> 'flash', so a request survives version bumps."""
+        return re.sub(r"^\d+(\.\d+)*\s*", "", name.strip().lower())
+
+    def current_model(self) -> str:
+        btn = self.page.locator(SEL_MODEL_BUTTON).first
+        m = re.search(r"currently (.+)", btn.get_attribute("aria-label") or "")
+        return (m.group(1) if m else btn.inner_text()).strip()
+
+    def select_model(self, want: str) -> None:
+        """Pick a model from Gemini's mode picker by name ('flash', 'pro', 'flash-lite', '3.1', ...)."""
+        self.page.locator(SEL_MODEL_BUTTON).first.click()
+        self.page.locator(SEL_MODEL_OPTION).first.wait_for(timeout=10_000)
+        options = {el.inner_text().split("\n")[0].strip(): el for el in self.page.locator(SEL_MODEL_OPTION).all()}
+        w = want.strip().lower()
+        hits = [n for n in options if w in (n.lower(), self._model_key(n))] \
+            or [n for n in options if w in n.lower()]
+        if len(hits) != 1:
+            self.page.keyboard.press("Escape")
+            raise SystemExit(f"Model {want!r} is {'ambiguous' if hits else 'not available'}. "
+                             f"Gemini offers: {', '.join(options)}")
+        options[hits[0]].click()
+        time.sleep(1)
+        if self._model_key(self.current_model()) != self._model_key(hits[0]):
+            raise SystemExit(f"Tried to select {hits[0]!r} but Gemini shows {self.current_model()!r}")
+        self.model = hits[0]
+        print(f"Gemini model: {hits[0]}")
+
     def ask(self, text: str, timeout: float = 600) -> list[dict]:
         page = self.page
         self.check_account()  # re-check every time: a session can expire or switch mid-run
+        if self.model and self._model_key(self.current_model()) != self._model_key(self.model):
+            print(f"  model changed to {self.current_model()!r}; switching back to {self.model!r}")
+            self.select_model(self.model)
         n = page.locator(SEL_RESPONSE).count()
         box = page.locator(SEL_INPUT).first
         box.click()
-        box.fill(text)
+        box.fill(safety.redact(text))  # last line of defense: never send secrets
         try:
             page.locator(SEL_SEND).first.click(timeout=5_000)
         except PWTimeout:
@@ -332,11 +371,18 @@ def collect_files(root: Path, targets: list[str]) -> dict[str, str]:
         for f in sorted(list_dir(p) if p.is_dir() else [p]):
             if not f.resolve().is_relative_to(root):
                 sys.exit(f"{f} is outside --root {root}")
+            rel = str(f.resolve().relative_to(root))
+            if safety.PROTECTED.search(rel):
+                print(f"  skipping {rel} (secrets/credentials/CI file; never sent)")
+                continue
             text = read_text(f)
             if text is None:
-                print(f"  skipping {f.relative_to(root)} (binary, unreadable, or too large)")
+                print(f"  skipping {rel} (binary, unreadable, or too large)")
                 continue
-            files[str(f.resolve().relative_to(root))] = text
+            if (hits := safety.find_secrets(text)):
+                print(f"  skipping {rel} (contains what looks like a secret: {', '.join(hits[:3])})")
+                continue
+            files[rel] = text
     return files
 
 
@@ -518,6 +564,16 @@ def apply_edits(root: Path, edits, backup_dir: Path) -> list[str]:
             print(f"  merged partial edit into {rel}: {', '.join(merged[1])}")
         if old == content:
             continue
+        findings = safety.scan_edit(rel, old, content)
+        if findings:
+            high = [x for x in findings if x[0] == "high"]
+            print(f"  Safety check on {rel}:\n{safety.format_findings(findings)}")
+            if high and ask_user(f"  Write {rel} anyway? [y/N] ").strip().lower() != "y":
+                print(f"  REJECTED {rel}: failed safety check")
+                notes.append(f"Your change to `{rel}` was rejected by a safety check: "
+                             + "; ".join(sorted({x[1] for x in high}))
+                             + ". Do not do that; solve the problem without it.")
+                continue
         if old is not None:
             (backup_dir / rel).parent.mkdir(parents=True, exist_ok=True)
             if not (backup_dir / rel).exists():  # keep the pre-session original
@@ -532,10 +588,12 @@ def apply_edits(root: Path, edits, backup_dir: Path) -> list[str]:
 
 
 # --- Commands -----------------------------------------------------------------------------------
-def run(cmd: str, root: Path, timeout: int) -> tuple[int, str]:
-    print(f"$ {cmd}")
+def run(cmd: str, root: Path, timeout: int, sandbox: bool = False) -> tuple[int, str]:
+    argv = safety.sandbox_argv(cmd, root) if sandbox else None
+    print(f"$ {cmd}" + ("   [sandboxed]" if argv else ""))
     try:
-        r = subprocess.run(cmd, shell=True, cwd=root, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(argv or cmd, shell=argv is None, cwd=root, capture_output=True, text=True,
+                           timeout=timeout)
         code, out = r.returncode, r.stdout + r.stderr
     except subprocess.TimeoutExpired as e:
         code, out = -1, f"{e.stdout or ''}{e.stderr or ''}\n[timed out after {timeout}s]"
@@ -569,6 +627,8 @@ def review_commands(commands: list[str], root: Path, timeout: int, test_cmd: str
         if cmd == test_cmd:
             continue  # the loop runs the test itself
         print("\nGemini suggests running:\n" + "\n".join("    " + line for line in cmd.splitlines()))
+        if (findings := safety.scan_command(cmd)):
+            print("  WARNING, this command:\n" + safety.format_findings(findings))
         while True:
             a = ask_user("  [a]pprove / [m]odify / [s]kip? ").strip().lower()
             if a in ("a", "m", "s"):
@@ -578,6 +638,8 @@ def review_commands(commands: list[str], root: Path, timeout: int, test_cmd: str
                 break
         if a == "m":
             cmd = edit_text(cmd)
+            if (findings := safety.scan_command(cmd)):
+                print("  WARNING, edited command:\n" + safety.format_findings(findings))
         if a == "s" or not cmd:
             results.append(f"User skipped command:\n{fenced(cmd)}")
             continue
@@ -626,6 +688,10 @@ def main():
     ap.add_argument("--chrome-profile", default=os.environ.get("GEMININONCE_CHROME_PROFILE"),
                     help="use a copy of your own Chrome profile (dir, name or email, e.g. 'Profile 2'); "
                          "'list' shows them")
+    ap.add_argument("--no-sandbox", action="store_true",
+                    help="run the test command unsandboxed (allows network and writes outside the project)")
+    ap.add_argument("--model", default=os.environ.get("GEMININONCE_MODEL", "flash"),
+                    help="Gemini model to force: flash (default), pro, flash-lite, ...; 'any' leaves it alone")
     ap.add_argument("--cdp", help="attach to an already-running Chrome, e.g. http://127.0.0.1:9222")
     args = ap.parse_args()
     if args.chrome_profile == "list":
@@ -634,7 +700,8 @@ def main():
         return 0
 
     for var in os.environ:
-        if var.startswith("GEMININONCE_") and var not in ("GEMININONCE_ACCOUNT", "GEMININONCE_HOME", "GEMININONCE_CHROME_PROFILE"):
+        if var.startswith("GEMININONCE_") and var not in ("GEMININONCE_ACCOUNT", "GEMININONCE_HOME", "GEMININONCE_CHROME_PROFILE",
+                                                                    "GEMININONCE_MODEL"):
             print(f"warning: unknown environment variable {var} (did you mean GEMININONCE_ACCOUNT?)")
     root = Path(args.root).resolve()
     HOME.mkdir(parents=True, exist_ok=True)
@@ -650,7 +717,10 @@ def main():
 
     test_out = ""
     if args.test:
-        code, test_out = run(args.test, root, args.timeout)
+        if not args.no_sandbox and not safety.sandbox_argv("true", root):
+            print("warning: no sandbox available here (macOS sandbox-exec / Linux bwrap); "
+                  "the test command will run Gemini's code unconfined.")
+        code, test_out = run(args.test, root, args.timeout, sandbox=not args.no_sandbox)
         if code == 0 and not args.message:
             print("Test already passes; nothing to do (pass -m to request a change anyway).")
             return
@@ -671,7 +741,8 @@ def main():
         chrome_profile = resolve_profile(args.chrome_profile)
         if args.profile == str(HOME / "profile"):
             profile_dir = HOME / "chrome"
-    gemini = Gemini(profile_dir, args.cdp, args.account, chrome_profile)
+    gemini = Gemini(profile_dir, args.cdp, args.account, chrome_profile,
+                    None if args.model.lower() == "any" else args.model)
     passed, stalled, last_sig = False, 0, _signature(test_out)
     try:
         for i in range(1, args.max_iters + 1):
@@ -696,7 +767,7 @@ def main():
                 prompt = "\n\n".join([reply, *notes, *results, RULES])
                 continue
 
-            code, out = run(args.test, root, args.timeout)
+            code, out = run(args.test, root, args.timeout, sandbox=not args.no_sandbox)
             if code == 0:
                 print(f"\nTests pass after {i} round(s).")
                 passed = True

@@ -77,6 +77,13 @@ If Gemini sends only the changed functions or classes instead of the whole file,
 `# ... existing code ...` placeholders, each definition is merged into the file by name. If a
 snippet can't be placed unambiguously, it's rejected and Gemini is asked for the complete file.
 
+**Model:** it uses **Flash** by default. Choose a different model with `--model pro`,
+`--model flash-lite`, or any unique part of a name shown in Gemini's model picker (e.g.
+`--model 3.1`). Version numbers are ignored, so `flash` keeps working after an upgrade. Set
+`GEMININONCE_MODEL` to change the default, or use `--model any` to leave the picker alone. The
+model is checked before every message and switched back if it changed. If the requested model
+isn't available, it exits and lists the models Gemini offers.
+
 Other options: `--root` sets the project root that paths are relative to, and
 `--cdp http://127.0.0.1:9222` attaches to a Chrome you started with `--remote-debugging-port=9222`.
 
@@ -106,6 +113,42 @@ where you'd sign in once.
 every message the tool reads the signed-in account from the page, and it refuses to send if
 Gemini is signed out or doesn't match `GEMININONCE_ACCOUNT` / `--account`. If several Google
 accounts are signed in, it switches to the matching one.
+
+## Safety
+
+These are rough guard rails, not a guarantee. You should still review what Gemini changed
+(`git diff`).
+
+- **The test command runs in a sandbox.** That command runs whatever code Gemini wrote. Inside the
+  sandbox there's no internet access (localhost still works), files can only be written inside the
+  project and temp folders, and credential locations (`~/.ssh`, `~/.aws`, `~/.gnupg`, Keychains,
+  Chrome/Firefox profiles, `~/.netrc`, …) can't be read. It uses `sandbox-exec` on macOS and `bwrap`
+  on Linux if installed, with a warning when neither is available. If your tests need the internet,
+  use `--no-sandbox`.
+- **Every added line is checked before a file is written.** Only lines Gemini added are checked, not
+  ones that were already there. The checks look for:
+  - recursive deletes, disk wipes, destructive SQL or git
+  - system paths, your home folder or credentials
+  - `curl | sh`
+  - webhooks and pastebins, raw-IP URLs
+  - obfuscated `exec`
+  - startup hooks (`.zshrc`, cron, LaunchAgents), `sudo`
+  - `git push`, `npm publish`, sending email
+  - crypto miners
+  - hard-coded secrets
+
+  It also flags writes to `.git/`, CI workflows, `.env` and key files, install hooks
+  (`postinstall`, `cmdclass`), and a file shrinking by more than 80%. For Python it adds new
+  findings from [Bandit](https://github.com/PyCQA/bandit), via `bandit` or `uvx bandit`. Serious
+  findings need your `y`; otherwise the file is rejected and Gemini is told why. Minor ones (plain
+  `subprocess`, network calls) are just shown.
+- **Suggested shell commands get the same checks,** shown with warnings before you approve or
+  modify them. Commands you approve run outside the sandbox, because they may need the internet
+  (e.g. `pip install`).
+- **Secrets aren't sent to Gemini.** Files that look like credentials (`.env`, `*.pem`, …) or that
+  contain keys or tokens (AWS, GitHub, Google, Slack, OpenAI/Anthropic, Stripe, private keys, JWTs,
+  `password = "..."`) are never sent. Anything that looks like a secret in test output is replaced
+  with `[REDACTED]`.
 
 ## When it breaks
 

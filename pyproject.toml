@@ -13,4 +13,4 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-py-modules = ["gemininonce"]
+py-modules = ["gemininonce", "gemininonce_safety"]
