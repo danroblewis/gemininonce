@@ -72,6 +72,7 @@ and `GEMININONCE_PRICE`. See `gemininonce --help` and `gemininonce build --help`
 - [How the fix loop works](docs/how-it-works.md): rounds, file requests, retries, partial edits, output, models, cost
 - [`gemininonce build`](docs/build.md): spec, then test plan, then tests, then code, with independent reviews and locked tests
 - [Testing](docs/testing.md): what a good test suite looks like, and how `build` gets there
+- [Example projects](EXAMPLES.md): 10 projects built on public APIs, including library and API migrations, each with commands to run it
 - [Accounts and anonymous mode](docs/accounts.md): Chrome profiles, account checks, the free tier
 - [Safety](docs/safety.md): sandbox, code checks, secrets
 - [Development](docs/development.md): installing from a clone, updating, uvx, tests, code layout
