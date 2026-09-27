@@ -117,12 +117,35 @@ def scan_edit(rel: str, old: str | None, new: str) -> list[tuple[str, str, int, 
     if old and len(old.strip()) > 200 and len(new.strip()) < 0.2 * len(old.strip()):
         found.append(("high", f"file shrinks from {len(old)} to {len(new)} chars (wipe?)", 0, rel))
     added = added_lines(old or "", new)
-    found += scan_lines(added)
+    found += [temp_cleanup(new, finding) for finding in scan_lines(added)]
     if find_secrets("\n".join(ln for _, ln in added)):
         found.append(("high", "hard-coded secret/credential", 0, rel))
     if rel.endswith(".py"):
         found += bandit_new_findings(old or "", new)
     return found
+
+
+TEMP_SOURCES = r"(?:tempfile\.)?(?:mkdtemp|TemporaryDirectory|gettempdir)\(|\btmp_path\b|\btmpdir\b|tmp_path_factory"
+
+
+def temp_cleanup(text: str, finding: tuple[str, str, int, str]) -> tuple[str, str, int, str]:
+    """A recursive delete of a temp folder the same file created (tempfile.mkdtemp(), TemporaryDirectory(),
+    pytest's tmp_path) is routine clean-up: report it as low severity instead of blocking."""
+    sev, label, n, line = finding
+    if label != "recursive/forced delete":
+        return finding
+    m = re.search(r"(?:rmtree|rimraf|rm(?:Sync)?)\(\s*([\w.\[\]'\"]+)", line)
+    if not m:
+        return finding
+    target = m.group(1)
+    name = re.escape(target.split(".")[0].split("[")[0])
+    made_here = (re.search(TEMP_SOURCES, target)
+                 or re.search(rf"^\s*{name}\s*=.*{TEMP_SOURCES}", text, re.M)  # d = tempfile.mkdtemp()
+                 or re.search(rf"{TEMP_SOURCES}.*\bas\s+{name}\b", text)      # with TemporaryDirectory() as d
+                 or re.search(rf"def \w+\([^)]*\b{name}\b[^)]*\)", text) and name in ("tmp_path", "tmpdir"))
+    if not made_here:
+        return finding
+    return "low", f"deletes a temporary folder it created ({target})", n, line
 
 
 def scan_command(cmd: str) -> list[tuple[str, str, int, str]]:

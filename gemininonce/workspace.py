@@ -183,13 +183,37 @@ class Workspace:
         if findings:
             high = [x for x in findings if x[0] == "high"]
             print(f"  Safety check on {rel}:\n{paint_findings(safety.format_findings(findings))}")
-            if high and ask_user(f"  Write {rel} anyway? [y/N] ").strip().lower() != "y":
+            self._show_flagged_lines(rel, content, high or findings)
+            while high:
+                answer = ask_user(f"  Write {rel} anyway? [y/N/v = view the whole file] ").strip().lower()
+                if answer == "v":
+                    print(self.hl.code(content.rstrip("\n"), self.hl.lexer_for(content, rel)))
+                    continue
+                if answer == "y":
+                    break
                 print(paint(f"  REJECTED {rel}: failed safety check", RED))
                 return (f"Your change to `{rel}` was rejected by a safety check: "
                         + "; ".join(sorted({x[1] for x in high}))
                         + ". Do not do that; solve the problem without it.")
         self._write(rel, p, old, content)
         return None
+
+    def _show_flagged_lines(self, rel: str, content: str, findings, context: int = 4) -> None:
+        """The code around each flagged line (numbered, the flagged line marked), so it's clear what it
+        does and where its values come from."""
+        lines = content.splitlines()
+        flagged = sorted({n for _, _, n, _ in findings if 0 < n <= len(lines)})
+        shown_to = 0
+        for n in flagged:
+            start, end = max(n - context, shown_to + 1), min(n + context, len(lines))
+            if start > end:
+                continue
+            print(paint(f"    {rel}, lines {start}-{end}:", DIM))
+            code = self.hl.code("\n".join(lines[start - 1:end]), self.hl.lexer_for(content, rel)).splitlines()
+            for i, ln in zip(range(start, end + 1), code):
+                mark = paint(">", RED, BOLD) if i in flagged else " "
+                print(f"    {mark} {paint(f'{i:4}', DIM)}  {ln}")
+            shown_to = end
 
     def _write(self, rel: str, p: Path, old: str | None, content: str) -> None:
         if old is not None:

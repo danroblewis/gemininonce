@@ -23,9 +23,12 @@ These are rough guard rails, not a guarantee. You should still review what Gemin
 
   It also flags writes to `.git/`, CI workflows, `.env` and key files, install hooks
   (`postinstall`, `cmdclass`), and a file shrinking by more than 80%. For Python it adds new
-  findings from [Bandit](https://github.com/PyCQA/bandit), via `bandit` or `uvx bandit`. Serious
-  findings need your `y`; otherwise the file is rejected and Gemini is told why. Minor ones (plain
-  `subprocess`, network calls) are just shown.
+  findings from [Bandit](https://github.com/PyCQA/bandit), via `bandit` or `uvx bandit`. Serious findings
+  need your `y`. You're shown the code around each flagged line (numbered, flagged lines marked),
+  so you can see where its values come from, and `v` shows the whole file. Otherwise the file is
+  rejected and Gemini is told why. Minor findings (plain `subprocess`, network calls) are just shown.
+  So is a recursive delete of a temporary folder the same file created (`tempfile.mkdtemp()`,
+  `TemporaryDirectory()`, pytest's `tmp_path`), which is routine clean-up.
 - **New files need your OK.** Gemini sometimes makes up paths (e.g. `src/todo.py` when the code is
   in `todo/service.py`). A file that doesn't exist yet is only created if you type `y`. Otherwise
   Gemini is told which files really exist. Use `--allow-new-files` to skip the question.

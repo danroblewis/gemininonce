@@ -186,3 +186,29 @@ def test_sandbox_network_is_optional(tmp_path):
     assert " ".join(offline) != " ".join(online)
     assert ("(deny network*)" in " ".join(offline)) or ("--unshare-net" in offline)
     assert "(deny network*)" not in " ".join(online) and "--unshare-net" not in online
+
+
+@pytest.mark.parametrize("code", [
+    "import shutil, tempfile\nd = tempfile.mkdtemp()\nshutil.rmtree(d)\n",
+    "import shutil, tempfile\nwith tempfile.TemporaryDirectory() as d:\n    shutil.rmtree(d)\n",
+    "import shutil\ndef test_x(tmp_path):\n    shutil.rmtree(tmp_path / 'out')\n",
+])
+def test_deleting_a_temp_folder_it_created_is_only_a_note(code):
+    findings = scan_edit("tests/conftest.py", "", code)
+    assert not [f for f in findings if f[0] == "high"]
+    assert any("deletes a temporary folder it created" in f[1] for f in findings)
+
+
+def test_deleting_anything_else_still_needs_approval():
+    code = "import shutil, os\nd = os.getcwd()\nshutil.rmtree(d)\n"
+    assert any(f[0] == "high" and f[1] == "recursive/forced delete" for f in scan_edit("x.py", "", code))
+
+
+def test_flagged_lines_are_shown_in_context_and_v_shows_the_file(ws, monkeypatch, capsys):
+    code = "import shutil, os\n\n\ndef clean():\n    d = os.getcwd()\n    shutil.rmtree(d)\n"
+    monkeypatch.setattr(sys, "stdin", io.StringIO("v\nn\n"))
+    notes = ws.apply([("a.py", code)])
+    out = capsys.readouterr().out
+    assert "a.py, lines 2-6:" in out and ">    6" in out and "d = os.getcwd()" in out  # where d comes from
+    assert out.count("def clean():") == 2  # once in the context, once more for "v"
+    assert "rejected by a safety check" in notes[0]
