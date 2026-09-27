@@ -1,0 +1,14 @@
+{
+ "prompt": "Running my script fails with `ModuleNotFoundError: No module named 'requests'`. I don't need any file changes, just the command to fix it.\n\nRULES FOR YOUR REPLY (a script applies your reply mechanically; you cannot run tools):\n1. For every file you change or create, write a line `FILE: <relative/path>` and immediately after it\n   ONE fenced code block containing the COMPLETE new contents of that file. Never send diffs,\n   partial files, or placeholders like \"... rest unchanged\".\n2. Only include files you actually change.\n3. If a shell command must be run (e.g. install a dependency), write a line `COMMAND:` followed by a\n   fenced code block containing only the command. The user will review it before it runs.\n4. Keep any explanation short, and put nothing but file contents / commands inside code blocks.\n",
+ "blocks": [
+  {
+   "kind": "text",
+   "text": "COMMAND:"
+  },
+  {
+   "kind": "code",
+   "text": "pip install requests\n",
+   "lang": "Bash"
+  }
+ ]
+}

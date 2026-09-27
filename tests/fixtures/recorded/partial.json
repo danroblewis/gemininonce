@@ -1,0 +1,14 @@
+{
+ "prompt": "Fix `_next_id` in this file so ids stay unique after a todo is removed. Reply with `FILE: todo/service.py` and a code block containing ONLY the class line and the changed method, with a `# ... existing code ...` comment standing in for everything else.\n\nFILE: todo/service.py\n```\nfrom __future__ import annotations\n\nfrom datetime import date\n\nfrom .models import Todo\nfrom .utils import normalize_tag\n\n\nclass TodoList:\n    def __init__(self, todos: list[Todo] | None = None):\n        self.todos = list(todos or [])\n\n    def _next_id(self) -> int:\n        return len(self.todos) + 1\n\n    def add(self, title: str, priority: int = 2, due: date | None = None, tags=()) -> Todo:\n        title = title.strip()\n        if not title:\n            raise ValueError(\"title must not be empty\")\n        if priority not in (1, 2, 3):\n            raise ValueError(\"priority must be 1, 2 or 3\")\n        todo = Todo(self._next_id(), title, priority=priority, due=due,\n                    tags=[normalize_tag(t) for t in tags])\n        self.todos.append(todo)\n        return todo\n\n    def get(self, todo_id: int) -> Todo:\n        for t in self.todos:\n            if t.id == todo_id:\n                return t\n        raise KeyError(todo_id)\n\n    def complete(self, todo_id: int) -> Todo:\n        todo = self.get(todo_id)\n        todo.done = True\n        return todo\n\n    def remove(self, todo_id: int) -> None:\n        self.todos.remove(self.get(todo_id))\n\n    def pending(self) -> list[Todo]:\n        \"\"\"Open todos, most urgent first: by priority, then due date (undated last).\"\"\"\n        open_todos = [t for t in self.todos if not t.done]\n        return sorted(open_todos, key=lambda t: (t.priority, t.due))\n\n    def with_tag(self, tag: str) -> list[Todo]:\n        tag = normalize_tag(tag)\n        return [t for t in self.todos if tag in t.tags]\n\n    def overdue(self, today: date) -> list[Todo]:\n        return [t for t in self.todos if t.is_overdue(today)]\n```",
+ "blocks": [
+  {
+   "kind": "text",
+   "text": "FILE: todo/service.py"
+  },
+  {
+   "kind": "code",
+   "text": "class TodoList:\n    # ... existing code ...\n    def _next_id(self) -> int:\n        return max((t.id for t in self.todos), default=0) + 1\n    # ... existing code ...\n",
+   "lang": "Python"
+  }
+ ]
+}

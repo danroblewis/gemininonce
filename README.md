@@ -232,4 +232,28 @@ you can see what changed.
 | `transcript.py`, `highlight.py`, `console.py` | Console output: transcript, syntax highlighting, colors and prompts |
 | `usage.py` | `Usage`: token counts and the API-equivalent cost estimate |
 
-Run the tests with `pytest tests`. They don't need a browser.
+## Tests
+
+```sh
+pytest tests          # offline, a few seconds
+pytest tests --e2e    # also runs the live tests against anonymous Gemini (~1.5 min)
+```
+
+- **Unit tests** (`test_gemininonce.py`) cover merging, safety checks, parsing, applying edits and the
+  cost estimate.
+- **Recorded-reply tests** (`test_recorded.py`) use real replies saved from an anonymous Gemini
+  session in `tests/fixtures/recorded/`. They check that:
+  - the page-reading code gets the same blocks from each saved reply's HTML (in a local browser,
+    no network)
+  - the recorded 7-reply session, replayed through the real fix loop, leaves the bundled todo app
+    (`tests/fixtures/todo_project`, 6 bugs) passing its tests. The replay includes Gemini's real
+    "I encountered an error" reply and the retry.
+  - partial-edit merging and command handling work on real replies
+- **End-to-end tests** (`test_e2e.py`, only with `--e2e`) use live signed-out Gemini: the sign-out
+  check, a message round trip, refusing Flash, and the full command fixing the todo app.
+
+To re-record the fixtures after Gemini's page changes, run `python tests/record_fixtures.py`. It
+uses an anonymous session, keeps the old fixtures unless the recorded session ends with passing
+tests, and refuses to save anything containing your home folder path or username.
+
+The tests use a temporary `GEMININONCE_HOME` and ignore your `GEMININONCE_*` settings.

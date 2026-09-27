@@ -91,6 +91,10 @@ class GeminiChat:
         if self.model:
             self.select_model(self.model)
 
+    def new_chat(self) -> None:
+        """Start a fresh conversation (no earlier messages as context)."""
+        self._load()
+
     def _load(self) -> None:
         self.page.goto(GEMINI_URL)
         try:

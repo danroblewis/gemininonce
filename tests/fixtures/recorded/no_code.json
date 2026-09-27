@@ -1,0 +1,9 @@
+{
+ "prompt": "In one short sentence and without any code: what does the word 'nonce' mean?",
+ "blocks": [
+  {
+   "kind": "text",
+   "text": "A nonce is an arbitrary number, word, or piece of data that is intended to be used only once for a specific, temporary purpose."
+  }
+ ]
+}
